@@ -4,32 +4,78 @@ use std::{
 };
 use std::f32::consts::PI;
 use std::ops::Deref;
-use crate::tokens::Token;
+use crate::tokens::{ArithmeticalOperator, LogicalOperator, Token};
 use thiserror;
 use log::{debug, error};
 
 #[derive(Debug)]
-pub enum Node {
+pub enum LogicalOperation {
+    And, Or
+}
+
+#[derive(Debug)]
+pub enum ArithmeticalOperation {
+    Addition,
+    Subtraction,
+    Multiplication,
+    Division
+}
+
+#[derive(Debug)]
+pub enum Expression {
     String(Rc<str>),
     Integer(i32),
     Float(f32),
     GlobalCall {
         name: Rc<str>,
-        args: Box<[Node]>
+        args: Box<[Expression]>
     },
-    LinearList(Box<[Node]>),
-    PropertyList(HashMap<Rc<str>, Node>),
+    LinearList(Box<[Expression]>),
+    PropertyList(HashMap<Rc<str>, Expression>),
+
+    LogicalOperation {
+        operation: LogicalOperator,
+        left: Box<Expression>,
+        right: Box<Expression>
+    },
+
+    ArithmeticalOperation {
+        operation: ArithmeticalOperation,
+        left: Box<Expression>,
+        right: Box<Expression>
+    },
+
     Void
 }
 
-impl Node {
+impl LogicalOperation {
+    pub fn to_string(&self) -> String {
+        match self {
+            LogicalOperation::And => "and".into(),
+            LogicalOperation::Or => "or".into()
+        }
+    }
+}
+
+impl ArithmeticalOperation {
+    pub fn to_string(&self) -> String {
+        match self {
+            ArithmeticalOperation::Addition => "addition".into(),
+            ArithmeticalOperation::Subtraction => "subtraction".into(),
+            ArithmeticalOperation::Multiplication => "multiplication".into(),
+            ArithmeticalOperation::Division => "division".into()
+        }
+    }
+}
+
+impl Expression {
     pub fn to_json_string(&self) -> String {
         match self {
-            Node::String(string) => format!("\"{}\"", string),
-            Node::Integer(int) => format!("{}", int),
-            Node::Float(float) => format!("{}", float),
-            Node::Void => "void".into(),
-            Node::GlobalCall { name, args } => {
+            Expression::String(string) => format!("\"{}\"", string),
+            Expression::Integer(int) => format!("{}", int),
+            Expression::Float(float) => format!("{}", float),
+            Expression::Void => "void".into(),
+            Expression::GlobalCall { name, args } => {
                 let args_str: Vec<String> = args
                     .iter()
                     .map(|n| n.to_json_string())
@@ -37,7 +83,7 @@ impl Node {
 
                 format!("{}({})", &name, args_str.join(","))
             },
-            Node::LinearList(list) => {
+            Expression::LinearList(list) => {
                 let list_str: Vec<String> = list
                     .iter()
                     .map(|n| n.to_json_string())
@@ -45,7 +91,7 @@ impl Node {
 
                 format!("[{}]", list_str.join(","))
             },
-            Node::PropertyList(props) => {
+            Expression::PropertyList(props) => {
                 let props_list: Vec<String> = props
                     .iter()
                     .map(|(key, value)| format!("\"{}\":{}", &key, value.to_json_string()))
@@ -54,17 +100,43 @@ impl Node {
                 String::from("{")
                     + &format!("{}", props_list.join(","))
                     + "}"
+            },
+            Expression::LogicalOperation {
+                operation,
+                left,
+                right
+            } => {
+                String::from("{")
+                    + &format!("\"logical_operation\":{},\"left\":{},\"right\":{}",
+                               operation.to_string(),
+                               left.to_json_string(),
+                               right.to_json_string()
+                    )
+                    + "}"
+            },
+            Expression::ArithmeticalOperation {
+                operation,
+                left,
+                right
+            } => {
+                String::from("{")
+                    + &format!("\"arithmetical_operation\":{},\"left\":{},\"right\":{}",
+                               operation.to_string(),
+                               left.to_json_string(),
+                               right.to_json_string()
+                    )
+                    + "}"
             }
         }
     }
 
     pub fn to_json_string_pretty(&self) -> String {
         match self {
-            Node::String(string) => format!("\"{}\"", string),
-            Node::Integer(int) => format!("{}", int),
-            Node::Float(float) => format!("{}", float),
-            Node::Void => "void".into(),
-            Node::GlobalCall { name, args } => {
+            Expression::String(string) => format!("\"{}\"", string),
+            Expression::Integer(int) => format!("{}", int),
+            Expression::Float(float) => format!("{}", float),
+            Expression::Void => "void".into(),
+            Expression::GlobalCall { name, args } => {
                 let args_str: Vec<String> = args
                     .iter()
                     .map(|n| n.to_json_string())
@@ -72,7 +144,7 @@ impl Node {
 
                 format!("{}({})", &name, args_str.join(", "))
             },
-            Node::LinearList(list) => {
+            Expression::LinearList(list) => {
                 let list_str: Vec<String> = list
                     .iter()
                     .map(|n| n.to_json_string())
@@ -80,7 +152,7 @@ impl Node {
 
                 format!("[\n\t{}\n]", list_str.join(",\n\t"))
             },
-            Node::PropertyList(props) => {
+            Expression::PropertyList(props) => {
                 let props_list: Vec<String> = props
                     .iter()
                     .map(|(key, value)| format!("\"{}\": {}", &key, value.to_json_string()))
@@ -88,6 +160,32 @@ impl Node {
 
                 String::from("{\n\t")
                     + &format!("{}", props_list.join(",\n\t"))
+                    + "}"
+            },
+            Expression::LogicalOperation {
+                operation,
+                left,
+                right
+            } => {
+                String::from("{")
+                    + &format!("\n\t\"logical_operation\":{},\n\t\"left\":{},\n\t\"right\":{}",
+                               operation.to_string(),
+                               left.to_json_string_pretty(),
+                               right.to_json_string_pretty()
+                )
+                    + "}"
+            },
+            Expression::ArithmeticalOperation {
+                operation,
+                left,
+                right
+            } => {
+                String::from("{")
+                    + &format!("\n\t\"arithmetical_operation\":{},\n\t\"left\":{},\n\t\"right\":{}",
+                               operation.to_string(),
+                               left.to_json_string_pretty(),
+                               right.to_json_string_pretty()
+                )
                     + "}"
             }
         }
@@ -117,11 +215,17 @@ pub enum TokensParseError {
     #[error("out of range")]
     OutOfRange,
 
+    #[error("unsatisfied logical operator")]
+    UnsatisfiedLogicalOperator(LogicalOperator),
+
+    #[error("unsatisfied arithmetical operator")]
+    UnsatisfiedArithmeticalOperator(ArithmeticalOperator),
+
     #[error("undefined constant \"{}\"", constant)]
     UndefinedConstant { constant: Rc<str> }
 }
 
-fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Node, usize), TokensParseError> {
+fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, usize), TokensParseError> {
     if tokens.is_empty() { return Err(TokensParseError::EmptyTokens); }
 
     let length = tokens.len();
@@ -156,11 +260,11 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Node, usize),
 
                         if is_prop {
                             debug!("done parsing property list at ({})", begin);
-                            return Ok((Node::PropertyList(map), begin));
+                            return Ok((Expression::PropertyList(map), begin));
                         }
 
                         debug!("done parsing linear list at ({})", begin);
-                        return Ok((Node::LinearList(sub_nodes.into()), begin));
+                        return Ok((Expression::LinearList(sub_nodes.into()), begin));
                     },
 
                     Token::Colon => {
@@ -291,7 +395,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Node, usize),
         },
         Token::Void => {
             debug!("parsing void at ({})", begin);
-            return Ok((Node::Void, begin));
+            return Ok((Expression::Void, begin));
         },
         Token::String(string) => {
             debug!("parsing a string at ({})", begin);
@@ -358,27 +462,28 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Node, usize),
                 return Err(TokensParseError::UnexpectedEnd);
             }
 
-            return Ok((Node::String(buffer.into()), next - 1));
+            return Ok((Expression::String(buffer.into()), next - 1));
         },
         Token::Integer(int) => {
             debug!("parsing an integer at ({})", begin);
-            return Ok((Node::Integer(*int), begin));
+            return Ok((Expression::Integer(*int), begin));
         },
         Token::Float(float) => {
             debug!("parsing a float at ({})", begin);
-            return Ok((Node::Float(*float), begin))
+            return Ok((Expression::Float(*float), begin))
         },
         Token::Constant(constant) => {
             debug!("parsing a constant at ({})", begin);
 
             return match constant.deref() {
-                "RETURN" => Ok((Node::String( "\n".into()), begin)),
-                "SPACE"  => Ok((Node::String(  " ".into()), begin)),
-                "PI"     => Ok((Node::Float(PI), begin)),
+                "RETURN" => Ok((Expression::String( "\n".into()), begin)),
+                "SPACE"  => Ok((Expression::String(  " ".into()), begin)),
+                "PI"     => Ok((Expression::Float(PI), begin)),
 
                 _ => Err(TokensParseError::UndefinedConstant { constant: Rc::clone(constant) })
             }
         },
+
         Token::GlobalCall(name) => {
             debug!("parsing a global call at ({})", begin);
 
@@ -412,7 +517,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Node, usize),
                         }
 
                         debug!("global call arguments parsing done at ({})", begin);
-                        return Ok((Node::GlobalCall { name: Rc::clone(name), args: args.into() }, begin));
+                        return Ok((Expression::GlobalCall { name: Rc::clone(name), args: args.into() }, begin));
                     },
 
                     Token::Comma => {
@@ -447,11 +552,19 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Node, usize),
 
             error!("expected the global call arguments to end but they didn't");
             return Err(TokensParseError::ImbalancedCollection);
+        },
+
+        Token::LogicalOperator(op) => {
+            return Err(TokensParseError::UnsatisfiedLogicalOperator(op.clone()));
+        },
+
+        Token::ArithmeticalOperator(op) => {
+            return Err(TokensParseError::UnsatisfiedArithmeticalOperator(op.clone()));
         }
     }
 }
 
-pub fn parse_tokens<T : AsRef<[Token]>>(tokens: T) -> Result<Node, TokensParseError> {
+pub fn parse_tokens<T : AsRef<[Token]>>(tokens: T) -> Result<Expression, TokensParseError> {
     match parse_tokens_helper(tokens.as_ref(), 0) {
         Ok((node, _)) => Ok(node),
         Err(e) => Err(e)

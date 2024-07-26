@@ -5,6 +5,36 @@ use std::{
 use thiserror;
 use log::error;
 
+#[derive(Debug, Clone)]
+pub enum LogicalOperator {
+    Or, And
+}
+
+#[derive(Debug, Clone)]
+pub enum ArithmeticalOperator {
+    Add, Subtract, Multiply, Divide
+}
+
+impl LogicalOperator {
+    pub fn to_string(&self) -> String {
+        match self {
+            LogicalOperator::Or => "or".into(),
+            LogicalOperator::And => "and".into()
+        }
+    }
+}
+
+impl ArithmeticalOperator {
+    pub fn to_string(&self) -> String {
+        match self {
+            ArithmeticalOperator::Add => "add".into(),
+            ArithmeticalOperator::Subtract => "subtract".into(),
+            ArithmeticalOperator::Multiply => "multiply".into(),
+            ArithmeticalOperator::Divide => "divide".into()
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Token {
     OpenBracket,
@@ -16,6 +46,8 @@ pub enum Token {
     Comma,
     Colon,
     Concatenation,
+    LogicalOperator(LogicalOperator),
+    ArithmeticalOperator(ArithmeticalOperator),
 
     Void,
 
@@ -73,7 +105,36 @@ pub fn tokenize<T : AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> 
             ',' => { tokens.push(Token::Comma); },
             ':' => { tokens.push(Token::Colon); },
 
-            '&' => { tokens.push(Token::Concatenation) },
+            '&' => {
+                if let Some(next) = chars.peek() {
+                    if *next == '&' {
+                        tokens.push(Token::LogicalOperator(LogicalOperator::And));
+
+                        chars.next();
+                        continue;
+                    }
+                }
+
+                tokens.push(Token::Concatenation);
+            },
+
+            '|' => {
+                if let Some(next) = chars.peek() {
+                    if *next == '|' {
+                        tokens.push(Token::LogicalOperator(LogicalOperator::Or));
+
+                        chars.next();
+                        continue;
+                    }
+                }
+
+                return Err(TokenizeError::UnexpectedToken { character: '|' });
+            },
+
+            '+' => { tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Add)); },
+            '-' => { tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Subtract)); },
+            '*' => { tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Multiply)); },
+            '/' => { tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Divide)); },
 
             '0' | '1' | '2' | '3' |
             '4' | '5' | '6' | '7' |
