@@ -22,6 +22,12 @@ pub enum ArithmeticalOperation {
 }
 
 #[derive(Debug)]
+pub enum Operation {
+    Logical(LogicalOperation),
+    Arithmetical(ArithmeticalOperation)
+}
+
+#[derive(Debug)]
 pub enum Expression {
     String(Rc<str>),
     Integer(i32),
@@ -33,14 +39,8 @@ pub enum Expression {
     LinearList(Box<[Expression]>),
     PropertyList(HashMap<Rc<str>, Expression>),
 
-    LogicalOperation {
-        operation: LogicalOperator,
-        left: Box<Expression>,
-        right: Box<Expression>
-    },
-
-    ArithmeticalOperation {
-        operation: ArithmeticalOperation,
+    Operation {
+        operation: Operation,
         left: Box<Expression>,
         right: Box<Expression>
     },
@@ -48,8 +48,26 @@ pub enum Expression {
     Void
 }
 
-impl LogicalOperation {
-    pub fn to_string(&self) -> String {
+impl From<LogicalOperator> for LogicalOperation {
+    fn from(value: LogicalOperator) -> Self {
+        match value {
+            LogicalOperator::Or => LogicalOperation::Or,
+            LogicalOperator::And => LogicalOperation::And,
+        }
+    }
+}
+
+impl From<&LogicalOperator> for LogicalOperation {
+    fn from(value: &LogicalOperator) -> Self {
+        match value {
+            LogicalOperator::Or => LogicalOperation::Or,
+            LogicalOperator::And => LogicalOperation::And,
+        }
+    }
+}
+
+impl ToString for LogicalOperation {
+    fn to_string(&self) -> String {
         match self {
             LogicalOperation::And => "and".into(),
             LogicalOperation::Or => "or".into()
@@ -57,13 +75,44 @@ impl LogicalOperation {
     }
 }
 
-impl ArithmeticalOperation {
-    pub fn to_string(&self) -> String {
+impl From<ArithmeticalOperator> for ArithmeticalOperation {
+    fn from(value: ArithmeticalOperator) -> Self {
+        match value {
+            ArithmeticalOperator::Add => ArithmeticalOperation::Addition,
+            ArithmeticalOperator::Subtract => ArithmeticalOperation::Subtraction,
+            ArithmeticalOperator::Multiply => ArithmeticalOperation::Multiplication,
+            ArithmeticalOperator::Divide => ArithmeticalOperation::Division,
+        }
+    }
+}
+
+impl From<&ArithmeticalOperator> for ArithmeticalOperation {
+    fn from(value: &ArithmeticalOperator) -> Self {
+        match value {
+            ArithmeticalOperator::Add => ArithmeticalOperation::Addition,
+            ArithmeticalOperator::Subtract => ArithmeticalOperation::Subtraction,
+            ArithmeticalOperator::Multiply => ArithmeticalOperation::Multiplication,
+            ArithmeticalOperator::Divide => ArithmeticalOperation::Division,
+        }
+    }
+}
+
+impl ToString for ArithmeticalOperation {
+    fn to_string(&self) -> String {
         match self {
             ArithmeticalOperation::Addition => "addition".into(),
             ArithmeticalOperation::Subtraction => "subtraction".into(),
             ArithmeticalOperation::Multiplication => "multiplication".into(),
             ArithmeticalOperation::Division => "division".into()
+        }
+    }
+}
+
+impl ToString for Operation {
+    fn to_string(&self) -> String {
+        match self {
+            Operation::Logical(l) => l.to_string(),
+            Operation::Arithmetical(a) => a.to_string(),
         }
     }
 }
@@ -101,20 +150,8 @@ impl Expression {
                     + &format!("{}", props_list.join(","))
                     + "}"
             },
-            Expression::LogicalOperation {
-                operation,
-                left,
-                right
-            } => {
-                String::from("{")
-                    + &format!("\"logical_operation\":{},\"left\":{},\"right\":{}",
-                               operation.to_string(),
-                               left.to_json_string(),
-                               right.to_json_string()
-                    )
-                    + "}"
-            },
-            Expression::ArithmeticalOperation {
+            
+            Expression::Operation {
                 operation,
                 left,
                 right
@@ -162,20 +199,8 @@ impl Expression {
                     + &format!("{}", props_list.join(",\n\t"))
                     + "}"
             },
-            Expression::LogicalOperation {
-                operation,
-                left,
-                right
-            } => {
-                String::from("{")
-                    + &format!("\n\t\"logical_operation\":{},\n\t\"left\":{},\n\t\"right\":{}",
-                               operation.to_string(),
-                               left.to_json_string_pretty(),
-                               right.to_json_string_pretty()
-                )
-                    + "}"
-            },
-            Expression::ArithmeticalOperation {
+            
+            Expression::Operation {
                 operation,
                 left,
                 right
@@ -194,6 +219,12 @@ impl Expression {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TokensParseError {
+    #[error("unexpected logical operator")]
+    UnexpectedLogicalOperator(LogicalOperator),
+
+    #[error("unexpected arithmetical operator")]
+    UnexpectedArithmeticalOperator(ArithmeticalOperator),
+
     #[error("unexpected token: {:?}", character)]
     UnexpectedToken { character: Option<char> },
 
@@ -374,8 +405,77 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
             return Err(TokensParseError::UnexpectedToken { character: Some(')') });
         },
         Token::OpenParenthesis => {
-            error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: Some('(') });
+            // Handle operations such as (a + b) and (a || b)
+
+            let mut left_opt: Option<Expression> = None;
+            let mut right_opt: Option<Expression> = None;
+            let mut op_opt: Option<Operation> = None;
+
+            begin += 1;
+
+            while begin < length {
+
+                match &tokens[begin] {
+
+                    Token::CloseParenthesis => {
+                        if left_opt.is_none() || right_opt.is_none() || op_opt.is_none() {
+                            return Err(TokensParseError::UnexpectedToken { character: Some(')') });
+                        }
+
+                        return Ok((
+                            Expression::Operation { 
+                                operation: op_opt.unwrap(), 
+                                left: Box::new(left_opt.unwrap()), 
+                                right: Box::new(right_opt.unwrap()) 
+                            }, 
+                            begin
+                        ));
+                    },
+
+
+                    Token::LogicalOperator(l) => {
+                        if left_opt.is_none() || op_opt.is_some() || right_opt.is_some() { 
+                            return Err(TokensParseError::UnexpectedLogicalOperator(l.clone())); 
+                        }
+
+                        op_opt = Some(Operation::Logical(l.into()))
+                    },
+
+                    Token::ArithmeticalOperator(a) => {
+                        if left_opt.is_none() || op_opt.is_some() || right_opt.is_some() { 
+                            return Err(TokensParseError::UnexpectedArithmeticalOperator(a.clone())); 
+                        }
+
+                        op_opt = Some(Operation::Arithmetical(a.into()))
+                    },
+
+                    Token::Identifier(_) | Token::Comma |
+                    Token::Colon | Token::Concatenation |
+                    Token::CloseBracket => {
+                        
+                        return Err(TokensParseError::UnexpectedToken { character: None });
+                    },
+
+                    _ => {
+
+                        let (node, new_cursor) = parse_tokens_helper(tokens, begin)?;
+                    
+                        match (&left_opt, &op_opt, &right_opt) {
+                            (None, None, None) => { left_opt = Some(node) },
+                            (Some(_), Some(_), None) => { right_opt = Some(node) },
+                            _ => {
+                                return Err(TokensParseError::UnexpectedToken { character: None });
+                            }
+                        }
+
+                        begin = new_cursor;
+                    }
+                }
+
+                begin += 1;
+            };
+
+            return Err(TokensParseError::UnexpectedEnd);
         },
         Token::Comma => {
             error!("unexpected token at ({})", begin);
