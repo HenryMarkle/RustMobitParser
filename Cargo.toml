@@ -9,7 +9,3 @@ anyhow = "1.0.86"
 log = "0.4.22"
 simple_logger = "5.0.0"
 clap = { version = "4.5.9", features = ["derive"] }
-
-[[bin]]
-name = "mep"
-path = "./src/main.rs"
