@@ -1,36 +1,59 @@
+use log::error;
 use std::{
     num::{ParseFloatError, ParseIntError},
-    rc::Rc
+    rc::Rc,
 };
 use thiserror;
-use log::error;
 
 #[derive(Debug, Clone)]
 pub enum LogicalOperator {
-    Or, And
+    Or,
+    And,
+}
+
+#[derive(Debug, Clone)]
+pub enum InequalityOperator {
+    Greater,
+    Smaller,
+    GreaterOrEq,
+    SmallerOrEq,
 }
 
 #[derive(Debug, Clone)]
 pub enum ArithmeticalOperator {
-    Add, Subtract, Multiply, Divide
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
 }
 
-impl LogicalOperator {
-    pub fn to_string(&self) -> String {
+impl ToString for LogicalOperator {
+    fn to_string(&self) -> String {
         match self {
             LogicalOperator::Or => "or".into(),
-            LogicalOperator::And => "and".into()
+            LogicalOperator::And => "and".into(),
         }
     }
 }
 
-impl ArithmeticalOperator {
-    pub fn to_string(&self) -> String {
+impl ToString for ArithmeticalOperator {
+    fn to_string(&self) -> String {
         match self {
             ArithmeticalOperator::Add => "add".into(),
             ArithmeticalOperator::Subtract => "subtract".into(),
             ArithmeticalOperator::Multiply => "multiply".into(),
-            ArithmeticalOperator::Divide => "divide".into()
+            ArithmeticalOperator::Divide => "divide".into(),
+        }
+    }
+}
+
+impl ToString for InequalityOperator {
+    fn to_string(&self) -> String {
+        match self {
+            InequalityOperator::Greater => "greater".into(),
+            InequalityOperator::Smaller => "smaller".into(),
+            InequalityOperator::GreaterOrEq => "greater or equal".into(),
+            InequalityOperator::SmallerOrEq => "smaller or equal".into(),
         }
     }
 }
@@ -45,23 +68,24 @@ pub enum Token {
 
     Comma,
     Colon,
+    Dot,
     Concatenation,
     LogicalOperator(LogicalOperator),
     ArithmeticalOperator(ArithmeticalOperator),
+    InequalityOperator(InequalityOperator),
 
     Void,
 
     String(Rc<str>),
     Integer(i32),
     Float(f32),
-    Identifier(Rc<str>),
+    MapKey(Rc<str>),
     GlobalCall(Rc<str>),
-    Constant(Rc<str>)
+    Constant(Rc<str>),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum TokenizeError {
-
     #[error("empty expression")]
     EmptyExpression,
 
@@ -73,22 +97,26 @@ pub enum TokenizeError {
 
     #[error("failed to parse integer")]
     IntParse {
-        #[from] err: ParseIntError,
+        #[from]
+        err: ParseIntError,
     },
 
     #[error("failed to parse float")]
     FloatParse {
-        #[from] err: ParseFloatError,
+        #[from]
+        err: ParseFloatError,
     },
 
     #[error("unexpected token \"{character}\"")]
-    UnexpectedToken { character: char }
+    UnexpectedToken { character: char },
 }
 
-pub fn tokenize<T : AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
+pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
     let str_ref = string.as_ref();
 
-    if str_ref.is_empty() { return Err(TokenizeError::EmptyExpression); }
+    if str_ref.is_empty() {
+        return Err(TokenizeError::EmptyExpression);
+    }
 
     let mut chars = str_ref.chars().peekable();
 
@@ -96,14 +124,53 @@ pub fn tokenize<T : AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> 
 
     while let Some(current) = chars.next() {
         match current {
-            '[' => { tokens.push(Token::OpenBracket); },
-            ']' => { tokens.push(Token::CloseBracket); },
+            ' ' => {
+                continue;
+            }
 
-            '(' => { tokens.push(Token::OpenParenthesis); },
-            ')' => { tokens.push(Token::CloseParenthesis); },
+            '[' => {
+                tokens.push(Token::OpenBracket);
+            }
+            ']' => {
+                tokens.push(Token::CloseBracket);
+            }
 
-            ',' => { tokens.push(Token::Comma); },
-            ':' => { tokens.push(Token::Colon); },
+            '(' => {
+                tokens.push(Token::OpenParenthesis);
+            }
+            ')' => {
+                tokens.push(Token::CloseParenthesis);
+            }
+
+            ',' => {
+                tokens.push(Token::Comma);
+            }
+            ':' => {
+                tokens.push(Token::Colon);
+            }
+
+            '>' => {
+                if let Some(next) = chars.peek() {
+                    if *next == '=' {
+                        tokens.push(Token::InequalityOperator(InequalityOperator::GreaterOrEq));
+                        chars.next();
+                        continue;
+                    }
+                }
+
+                tokens.push(Token::InequalityOperator(InequalityOperator::Greater));
+            }
+            '<' => {
+                if let Some(next) = chars.peek() {
+                    if *next == '=' {
+                        tokens.push(Token::InequalityOperator(InequalityOperator::SmallerOrEq));
+                        chars.next();
+                        continue;
+                    }
+                }
+
+                tokens.push(Token::InequalityOperator(InequalityOperator::Smaller));
+            }
 
             '&' => {
                 if let Some(next) = chars.peek() {
@@ -116,7 +183,37 @@ pub fn tokenize<T : AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> 
                 }
 
                 tokens.push(Token::Concatenation);
-            },
+            }
+
+            '.' => {
+                let mut buffer = String::with_capacity(2);
+                buffer.push('.');
+
+                while let Some(next) = chars.peek() {
+                    if next.is_digit(10) {
+                        buffer.push(*next);
+                        chars.next();
+                    }
+                    else {
+                        break;
+                    }
+                }
+
+                if buffer.len() > 1 {
+                    match buffer.parse::<f32>() {
+                        Ok(number) => {
+                            tokens.push(Token::Float(number));
+                        }
+                        Err(e) => {
+                            return Err(TokenizeError::FloatParse { err: e });
+                        }
+                    }
+
+                    continue;
+                }
+
+                tokens.push(Token::Dot);
+            }
 
             '|' => {
                 if let Some(next) = chars.peek() {
@@ -129,23 +226,31 @@ pub fn tokenize<T : AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> 
                 }
 
                 return Err(TokenizeError::UnexpectedToken { character: '|' });
-            },
+            }
 
-            '+' => { tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Add)); },
-            '-' => { tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Subtract)); },
-            '*' => { tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Multiply)); },
-            '/' => { tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Divide)); },
+            '+' => {
+                tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Add));
+            }
+            '-' => {
+                tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Subtract));
+            }
+            '*' => {
+                tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Multiply));
+            }
+            '/' => {
+                tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Divide));
+            }
 
-            '0' | '1' | '2' | '3' |
-            '4' | '5' | '6' | '7' |
-            '8' | '9' | '.' => {
+            '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
                 let mut buffer = String::with_capacity(1);
                 buffer.push(current);
                 let mut is_float = false;
 
                 while let Some(next) = chars.peek() {
-                    if next.is_digit(10) { buffer.push(*next); chars.next(); }
-                    else if *next == '.' {
+                    if next.is_digit(10) {
+                        buffer.push(*next);
+                        chars.next();
+                    } else if *next == '.' {
                         if is_float {
                             return Err(TokenizeError::DoubleDecimalPoint);
                         } else {
@@ -153,21 +258,31 @@ pub fn tokenize<T : AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> 
                             chars.next();
                             is_float = true;
                         }
-                    } else { break; }
+                    } else {
+                        break;
+                    }
                 }
 
                 if is_float {
                     match buffer.parse::<f32>() {
-                        Ok(number) => { tokens.push(Token::Float(number)); },
-                        Err(e) => { return Err(TokenizeError::FloatParse { err: e }); }
+                        Ok(number) => {
+                            tokens.push(Token::Float(number));
+                        }
+                        Err(e) => {
+                            return Err(TokenizeError::FloatParse { err: e });
+                        }
                     }
                 } else {
                     match buffer.parse::<i32>() {
-                        Ok(number) => { tokens.push(Token::Integer(number)); },
-                        Err(e) => { return Err(TokenizeError::IntParse { err: e }); }
+                        Ok(number) => {
+                            tokens.push(Token::Integer(number));
+                        }
+                        Err(e) => {
+                            return Err(TokenizeError::IntParse { err: e });
+                        }
                     }
                 }
-            },
+            }
 
             '#' => {
                 let mut buffer = String::with_capacity(1);
@@ -176,15 +291,17 @@ pub fn tokenize<T : AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> 
                     if next.is_alphanumeric() || *next == '_' {
                         buffer.push(*next);
                         chars.next();
-                    } else { break; }
+                    } else {
+                        break;
+                    }
                 }
 
                 if buffer.is_empty() {
                     return Err(TokenizeError::EmptyIdentifier);
                 }
 
-                tokens.push(Token::Identifier(buffer.into()));
-            },
+                tokens.push(Token::MapKey(buffer.into()));
+            }
 
             '"' => {
                 let mut buffer = String::with_capacity(1);
@@ -198,7 +315,7 @@ pub fn tokenize<T : AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> 
                 }
 
                 tokens.push(Token::String(buffer.into()));
-            },
+            }
 
             _ => {
                 let mut buffer = String::with_capacity(1);
@@ -209,8 +326,10 @@ pub fn tokenize<T : AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> 
 
                 while let Some(next) = chars.next() {
                     if next.is_alphanumeric() || next == '_' {
-                         buffer.push(next);
-                    } else { break; }
+                        buffer.push(next);
+                    } else {
+                        break;
+                    }
                 }
 
                 if buffer == "void" {

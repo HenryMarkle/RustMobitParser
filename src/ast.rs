@@ -4,7 +4,7 @@ use std::{
 };
 use std::f32::consts::PI;
 use std::ops::Deref;
-use crate::tokens::{ArithmeticalOperator, LogicalOperator, Token};
+use crate::tokens::{ArithmeticalOperator, InequalityOperator, LogicalOperator, Token};
 use thiserror;
 use log::{debug, error};
 
@@ -22,9 +22,20 @@ pub enum ArithmeticalOperation {
 }
 
 #[derive(Debug)]
-pub enum Operation {
+pub enum InequalityOperation {
+    Greater,
+    Smaller,
+    GreaterOrEq,
+    SmallerOrEq
+}
+
+#[derive(Debug)]
+pub enum Operator {
     Logical(LogicalOperation),
-    Arithmetical(ArithmeticalOperation)
+    Arithmetical(ArithmeticalOperation),
+    Inequality(InequalityOperation),
+    Dot,
+    Concatination
 }
 
 #[derive(Debug)]
@@ -32,6 +43,7 @@ pub enum Expression {
     String(Rc<str>),
     Integer(i32),
     Float(f32),
+
     GlobalCall {
         name: Rc<str>,
         args: Box<[Expression]>
@@ -40,7 +52,7 @@ pub enum Expression {
     PropertyList(HashMap<Rc<str>, Expression>),
 
     Operation {
-        operation: Operation,
+        operator: Operator,
         left: Box<Expression>,
         right: Box<Expression>
     },
@@ -97,6 +109,28 @@ impl From<&ArithmeticalOperator> for ArithmeticalOperation {
     }
 }
 
+impl From<InequalityOperator> for InequalityOperation {
+    fn from(value: InequalityOperator) -> Self {
+        match value {
+            InequalityOperator::Greater => InequalityOperation::Greater,
+            InequalityOperator::Smaller => InequalityOperation::Smaller,
+            InequalityOperator::GreaterOrEq => InequalityOperation::GreaterOrEq,
+            InequalityOperator::SmallerOrEq => InequalityOperation::SmallerOrEq,
+        }
+    }
+}
+
+impl From<&InequalityOperator> for InequalityOperation {
+    fn from(value: &InequalityOperator) -> Self {
+        match value {
+            InequalityOperator::Greater => InequalityOperation::Greater,
+            InequalityOperator::Smaller => InequalityOperation::Smaller,
+            InequalityOperator::GreaterOrEq => InequalityOperation::GreaterOrEq,
+            InequalityOperator::SmallerOrEq => InequalityOperation::SmallerOrEq,
+        }
+    }
+}
+
 impl ToString for ArithmeticalOperation {
     fn to_string(&self) -> String {
         match self {
@@ -108,11 +142,25 @@ impl ToString for ArithmeticalOperation {
     }
 }
 
-impl ToString for Operation {
+impl ToString for InequalityOperation {
     fn to_string(&self) -> String {
         match self {
-            Operation::Logical(l) => l.to_string(),
-            Operation::Arithmetical(a) => a.to_string(),
+            InequalityOperation::Greater => "greater then".into(),
+            InequalityOperation::Smaller => "smaller then".into(),
+            InequalityOperation::GreaterOrEq => "greater or equal to".into(),
+            InequalityOperation::SmallerOrEq => "smaller or equal to".into(),
+        }
+    }
+}
+
+impl ToString for Operator {
+    fn to_string(&self) -> String {
+        match self {
+            Operator::Logical(l) => l.to_string(),
+            Operator::Arithmetical(a) => a.to_string(),
+            Operator::Inequality(i) => i.to_string(),
+            Operator::Dot => ".".into(),
+            Operator::Concatination => "&".into()
         }
     }
 }
@@ -152,7 +200,7 @@ impl Expression {
             },
             
             Expression::Operation {
-                operation,
+                operator: operation,
                 left,
                 right
             } => {
@@ -201,7 +249,7 @@ impl Expression {
             },
             
             Expression::Operation {
-                operation,
+                operator: operation,
                 left,
                 right
             } => {
@@ -225,8 +273,14 @@ pub enum TokensParseError {
     #[error("unexpected arithmetical operator")]
     UnexpectedArithmeticalOperator(ArithmeticalOperator),
 
+    #[error("unexpected inequality operator")]
+    UnexpectedInequalityOperator(InequalityOperator),
+
+    #[error("unexpected concatination operator")]
+    UnexpectedConcatincationOperator,
+
     #[error("unexpected token: {:?}", character)]
-    UnexpectedToken { character: Option<char> },
+    UnexpectedToken { character: String },
 
     #[error("expected token: {}", character)]
     ExpectedToken { character: char },
@@ -252,8 +306,14 @@ pub enum TokensParseError {
     #[error("unsatisfied arithmetical operator")]
     UnsatisfiedArithmeticalOperator(ArithmeticalOperator),
 
+    #[error("unsatisfied inequality operator")]
+    UnsatisfiedInequalityOperator(InequalityOperator),
+
+    #[error("unsatisfied inequality operator")]
+    UnsatisfiedConcatinationOperator,    
+
     #[error("undefined constant \"{}\"", constant)]
-    UndefinedConstant { constant: Rc<str> }
+    UndefinedConstant { constant: String }
 }
 
 fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, usize), TokensParseError> {
@@ -286,7 +346,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
                         // are trailing commas allowed?
                         if commad {
                             error!("unexpected trailing comma at ({})", begin);
-                            return Err(TokensParseError::UnexpectedToken { character: Some(',') });
+                            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
                         }
 
                         if is_prop {
@@ -303,11 +363,11 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
                             is_prop = true;
                         } else if !is_prop {
                             error!("found an illegal colon at ({})", begin);
-                            return Err(TokensParseError::UnexpectedToken { character: Some(',') });
+                            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
                         }
                     },
 
-                    Token::Identifier(key) => {
+                    Token::MapKey(key) => {
                         debug!("parsing an identifier at ({})", begin);
 
                         if !commad {
@@ -343,9 +403,9 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
 
                         match &tokens[value_pos] {
                             Token::CloseBracket | Token::CloseParenthesis | Token::Colon |
-                            Token::Comma | Token::Identifier(_) => {
+                            Token::Comma | Token::MapKey(_) => {
                                 error!("illegal token for a property value at ({})", begin);
-                                return Err(TokensParseError::UnexpectedToken { character: None });
+                                return Err(TokensParseError::UnexpectedToken { character: "".into() });
                             },
 
                             _ => {
@@ -363,14 +423,14 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
                     Token::Comma => {
                         if commad {
                             error!("double comma at ({})", begin);
-                            return Err(TokensParseError::UnexpectedToken { character: Some(',') });
+                            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
                         }
                         commad = true;
                     },
 
-                    _ => {
+                    t => {
                         if !commad {
-                            error!("expected a comma at ({})", begin);
+                            error!("expected a comma but instead got ({:?}) at ({})", t, begin);
                             return Err(TokensParseError::ExpectedToken { character: ',' });
                         }
 
@@ -398,18 +458,18 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
         },
         Token::CloseBracket => {
             error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: Some(']') });
+            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::CloseBracket) });
         },
         Token::CloseParenthesis => {
             error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: Some(')') });
+            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::CloseParenthesis) });
         },
         Token::OpenParenthesis => {
-            // Handle operations such as (a + b) and (a || b)
+            // Handle operations such as (a + b), (a || b), and (a < b)
 
             let mut left_opt: Option<Expression> = None;
             let mut right_opt: Option<Expression> = None;
-            let mut op_opt: Option<Operation> = None;
+            let mut op_opt: Option<Operator> = None;
 
             begin += 1;
 
@@ -419,12 +479,12 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
 
                     Token::CloseParenthesis => {
                         if left_opt.is_none() || right_opt.is_none() || op_opt.is_none() {
-                            return Err(TokensParseError::UnexpectedToken { character: Some(')') });
+                            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::CloseParenthesis) });
                         }
 
                         return Ok((
                             Expression::Operation { 
-                                operation: op_opt.unwrap(), 
+                                operator: op_opt.unwrap(), 
                                 left: Box::new(left_opt.unwrap()), 
                                 right: Box::new(right_opt.unwrap()) 
                             }, 
@@ -438,7 +498,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
                             return Err(TokensParseError::UnexpectedLogicalOperator(l.clone())); 
                         }
 
-                        op_opt = Some(Operation::Logical(l.into()))
+                        op_opt = Some(Operator::Logical(l.into()))
                     },
 
                     Token::ArithmeticalOperator(a) => {
@@ -446,17 +506,33 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
                             return Err(TokensParseError::UnexpectedArithmeticalOperator(a.clone())); 
                         }
 
-                        op_opt = Some(Operation::Arithmetical(a.into()))
+                        op_opt = Some(Operator::Arithmetical(a.into()))
                     },
 
-                    Token::Identifier(_) | Token::Comma |
+                    Token::InequalityOperator(i) => {
+                        if left_opt.is_none() || op_opt.is_some() || right_opt.is_some() { 
+                            return Err(TokensParseError::UnexpectedInequalityOperator(i.clone())); 
+                        }
+
+                        op_opt = Some(Operator::Inequality(i.into()))
+                    },
+
+                    Token::Dot => {
+                        if left_opt.is_none() || op_opt.is_some() || right_opt.is_some() { 
+                            return Err(TokensParseError::UnexpectedToken {character: format!("{:?}", Token::Dot)}); 
+                        }
+
+                        op_opt = Some(Operator::Dot)
+                    }
+
+                    Token::MapKey(_) | Token::Comma |
                     Token::Colon | Token::Concatenation |
                     Token::CloseBracket => {
                         
-                        return Err(TokensParseError::UnexpectedToken { character: None });
+                        return Err(TokensParseError::UnexpectedToken { character: "".into() });
                     },
 
-                    _ => {
+                    t => {
 
                         let (node, new_cursor) = parse_tokens_helper(tokens, begin)?;
                     
@@ -464,7 +540,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
                             (None, None, None) => { left_opt = Some(node) },
                             (Some(_), Some(_), None) => { right_opt = Some(node) },
                             _ => {
-                                return Err(TokensParseError::UnexpectedToken { character: None });
+                                return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", t) });
                             }
                         }
 
@@ -479,19 +555,19 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
         },
         Token::Comma => {
             error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: Some(',') });
+            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
         },
         Token::Colon => {
             error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: Some(':') });
+            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Colon) });
         },
         Token::Concatenation => {
             error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: Some('&') });
+            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Concatenation) });
         },
-        Token::Identifier(_) => {
+        Token::MapKey(m) => {
             error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: Some('#') });
+            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::MapKey(Rc::clone(m))) });
         },
         Token::Void => {
             debug!("parsing void at ({})", begin);
@@ -500,69 +576,75 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
         Token::String(string) => {
             debug!("parsing a string at ({})", begin);
 
-            let mut buffer = String::from(string.as_ref());
-
-            let mut concatinated = false;
-
             let mut next = begin + 1;
 
-            while next < length {
+            let expr = Expression::String(Rc::clone(string));
+
+            let mut op_opt: Option<Operator> = None;
+            
+            if next < length {
                 match &tokens[next] {
-                    Token::Comma |
-                    Token::CloseParenthesis |
-                    Token::CloseBracket => break,
+                    Token::LogicalOperator(lp) => {
+                        if op_opt.is_some() {
+                            return Err(TokensParseError::UnexpectedLogicalOperator(lp.clone()));
+                        }
+
+                        op_opt = Some(Operator::Logical(lp.into()));
+                        next += 1;
+                    },
+
+                    Token::InequalityOperator(ip) => {
+                        if op_opt.is_some() {
+                            return Err(TokensParseError::UnexpectedInequalityOperator(ip.clone()));
+                        }
+
+                        op_opt = Some(Operator::Inequality(ip.into()));
+                        next += 1;
+                    },
+
+                    Token::ArithmeticalOperator(ap) => {
+                        if op_opt.is_some() {
+                            return Err(TokensParseError::UnexpectedArithmeticalOperator(ap.clone()));
+                        }
+
+                        op_opt = Some(Operator::Arithmetical(ap.into()));
+                        next += 1;
+                    },
 
                     Token::Concatenation => {
-                        if concatinated {
-                            return Err(TokensParseError::UnexpectedToken { character: Some('&') });
+                        if op_opt.is_some() {
+                            return Err(TokensParseError::UnexpectedConcatincationOperator);
                         }
 
-                        concatinated = true;
+                        op_opt = Some(Operator::Concatination);
+                        next += 1;
                     },
 
-                    Token::String(next_string) => {
-                        if !concatinated {
-                            return Err(TokensParseError::ExpectedToken { character: '&' });
-                        }
-                        concatinated = false;
-
-                        buffer.push_str(next_string);
+                    Token::Dot => {
+                        op_opt = Some(Operator::Dot);
+                        next += 1;
                     },
 
-                    Token::Integer(i) => {
-                        if !concatinated {
-                            return Err(TokensParseError::ExpectedToken { character: '&' });
-                        }
-                        concatinated = false;
-
-                        let formatted = format!("{}", i);
-                        buffer.push_str(&formatted);
-                    },
-
-                    Token::Float(f) => {
-                        if !concatinated {
-                            return Err(TokensParseError::ExpectedToken { character: '&' });
-                        }
-                        concatinated = false;
-
-                        let formatted = format!("{}", f);
-                        buffer.push_str(&formatted);
-                    },
-
-                    _ => {
-                        return Err(TokensParseError::UnexpectedToken { character: None });
-                    }
+                    _ => {}
                 }
-
-                next += 1;
             }
 
-            if concatinated {
-                error!("invalid string concatenation (trailing &) at ({})", next);
-                return Err(TokensParseError::UnexpectedEnd);
+            if op_opt.is_none() {
+                return Ok((expr, next - 1));
             }
 
-            return Ok((Expression::String(buffer.into()), next - 1));
+            debug!("parsing the right side of the operation at ({})", next);
+            
+            let res = parse_tokens_helper(&tokens, next)?;
+            
+            return Ok((
+                Expression::Operation { 
+                    operator: op_opt.unwrap(), 
+                    left: Box::new(expr), 
+                    right: Box::new(res.0) 
+                },
+                res.1
+            ));
         },
         Token::Integer(int) => {
             debug!("parsing an integer at ({})", begin);
@@ -580,7 +662,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
                 "SPACE"  => Ok((Expression::String(  " ".into()), begin)),
                 "PI"     => Ok((Expression::Float(PI), begin)),
 
-                _ => Err(TokensParseError::UndefinedConstant { constant: Rc::clone(constant) })
+                _ => Err(TokensParseError::UndefinedConstant { constant: String::from(constant.as_ref()) })
             }
         },
 
@@ -613,7 +695,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
                     Token::CloseParenthesis => {
                         if commad {
                             error!("unexpected trailing comma at ({})", begin);
-                            return Err(TokensParseError::UnexpectedToken { character: Some(',') });
+                            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
                         }
 
                         debug!("global call arguments parsing done at ({})", begin);
@@ -623,7 +705,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
                     Token::Comma => {
                         if commad {
                             error!("unexpected comma at ({})", begin);
-                            return Err(TokensParseError::UnexpectedToken { character: Some(',') });
+                            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
                         }
 
                         commad = true;
@@ -660,6 +742,14 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
 
         Token::ArithmeticalOperator(op) => {
             return Err(TokensParseError::UnsatisfiedArithmeticalOperator(op.clone()));
+        },
+
+        Token::InequalityOperator(ip) => {
+            return Err(TokensParseError::UnexpectedInequalityOperator(ip.clone()));
+        },
+
+        Token::Dot => {
+            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Dot) });
         }
     }
 }
