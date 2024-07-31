@@ -3,39 +3,58 @@ use std::{
     rc::Rc
 };
 use std::f32::consts::PI;
-use std::ops::Deref;
-use crate::tokens::{ArithmeticalOperator, InequalityOperator, LogicalOperator, Token};
+use std::fmt::{Display, format, Formatter};
+use crate::tokens::{self, Operator, Token};
 use thiserror;
 use log::{debug, error};
 
 #[derive(Debug)]
-pub enum LogicalOperation {
-    And, Or
-}
+pub enum BinaryOperator {
+    And,
+    Or,
 
-#[derive(Debug)]
-pub enum ArithmeticalOperation {
     Addition,
     Subtraction,
     Multiplication,
-    Division
-}
+    Division,
+    Mod,
 
-#[derive(Debug)]
-pub enum InequalityOperation {
     Greater,
     Smaller,
-    GreaterOrEq,
-    SmallerOrEq
+    GreaterOrEqual,
+    SmallerOrEqual,
+
+    Equal,
+    NotEqual,
+
+    Contains,
+    Starts,
+
+    Concatenation,
+    SpaceConcatenation,
+
+    Assignment
 }
 
 #[derive(Debug)]
-pub enum Operator {
-    Logical(LogicalOperation),
-    Arithmetical(ArithmeticalOperation),
-    Inequality(InequalityOperation),
-    Dot,
-    Concatination
+pub enum UnaryOperator {
+    Negate,
+    Negative,
+    Positive
+}
+
+#[derive(Debug)]
+pub enum PostOperator {
+    FunctionCall(Box<[Expression]>),
+
+    MemberAccess(Rc<str>),
+
+    Slice {
+        begin: Box<Expression>,
+        end: Box<Expression>
+    },
+
+    Index(Box<Expression>)
 }
 
 #[derive(Debug)]
@@ -44,240 +63,177 @@ pub enum Expression {
     Integer(i32),
     Float(f32),
 
-    GlobalCall {
-        name: Rc<str>,
-        args: Box<[Expression]>
-    },
     LinearList(Box<[Expression]>),
     PropertyList(HashMap<Rc<str>, Expression>),
 
-    Operation {
-        operator: Operator,
+    Identifier(Rc<str>),
+
+    BinaryOperation {
+        operator: BinaryOperator,
         left: Box<Expression>,
         right: Box<Expression>
+    },
+
+    UnaryOperation {
+        operator: UnaryOperator,
+        right: Box<Expression>
+    },
+
+    PostOperation {
+        left: Box<Expression>,
+        operator: PostOperator
     },
 
     Void
 }
 
-impl From<LogicalOperator> for LogicalOperation {
-    fn from(value: LogicalOperator) -> Self {
+impl TryFrom<&tokens::Operator> for BinaryOperator {
+    type Error = ();
+
+    fn try_from(value: &tokens::Operator) -> Result<Self, Self::Error> {
+        use BinaryOperator::*;
+
         match value {
-            LogicalOperator::Or => LogicalOperation::Or,
-            LogicalOperator::And => LogicalOperation::And,
+            tokens::Operator::Concatenation => Ok(Concatenation),
+            tokens::Operator::SpaceConcatenation => Ok(SpaceConcatenation),
+
+            tokens::Operator::Or => Ok(Or),
+            tokens::Operator::And => Ok(And),
+
+            tokens::Operator::Addition => Ok(Addition),
+            tokens::Operator::Subtraction => Ok(Subtraction),
+            tokens::Operator::Multiplication => Ok(Multiplication),
+            tokens::Operator::Division => Ok(Division),
+            tokens::Operator::Mod => Ok(Mod),
+
+            tokens::Operator::Inequality => Ok(NotEqual),
+
+            tokens::Operator::Contains => Ok(Contains),
+
+            tokens::Operator::Greater => Ok(Greater),
+            tokens::Operator::Smaller => Ok(Smaller),
+            tokens::Operator::GreaterOrEqual => Ok(GreaterOrEqual),
+            tokens::Operator::SmallerOrEqual => Ok(SmallerOrEqual),
+
+            _ => Err(())
         }
     }
 }
 
-impl From<&LogicalOperator> for LogicalOperation {
-    fn from(value: &LogicalOperator) -> Self {
+impl TryFrom<tokens::Operator> for BinaryOperator {
+    type Error = ();
+
+    fn try_from(value: tokens::Operator) -> Result<Self, Self::Error> {
+        Self::try_from(&value)
+    }
+}
+
+impl TryFrom<&tokens::Operator> for UnaryOperator {
+    type Error = ();
+
+    fn try_from(value: &tokens::Operator) -> Result<Self, Self::Error> {
         match value {
-            LogicalOperator::Or => LogicalOperation::Or,
-            LogicalOperator::And => LogicalOperation::And,
+            Operator::Not => Ok(UnaryOperator::Negate),
+            Operator::Addition => Ok(UnaryOperator::Positive),
+            Operator::Subtraction => Ok(UnaryOperator::Negative),
+
+            _ => Err(())
         }
     }
 }
 
-impl ToString for LogicalOperation {
-    fn to_string(&self) -> String {
+impl Display for BinaryOperator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", match self {
+            BinaryOperator::And => "and",
+            BinaryOperator::Or => "or",
+            BinaryOperator::Addition => "+",
+            BinaryOperator::Subtraction => "-",
+            BinaryOperator::Multiplication => "*",
+            BinaryOperator::Division => "/",
+            BinaryOperator::Greater => ">",
+            BinaryOperator::Smaller => "<",
+            BinaryOperator::GreaterOrEqual => ">=",
+            BinaryOperator::SmallerOrEqual => "<=",
+            BinaryOperator::Contains => "contains",
+            BinaryOperator::Starts => "starts",
+            BinaryOperator::Concatenation => "&",
+            BinaryOperator::SpaceConcatenation => "&&",
+            BinaryOperator::Mod => "mod",
+            BinaryOperator::Equal => "=",
+            BinaryOperator::NotEqual => "<>",
+            BinaryOperator::Assignment => "="
+        })
+    }
+}
+
+impl Display for UnaryOperator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", match self {
+            UnaryOperator::Negate => "not",
+            UnaryOperator::Negative => "-",
+            UnaryOperator::Positive => "+",
+        })
+    }
+}
+
+impl Display for PostOperator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            LogicalOperation::And => "and".into(),
-            LogicalOperation::Or => "or".into()
-        }
-    }
-}
-
-impl From<ArithmeticalOperator> for ArithmeticalOperation {
-    fn from(value: ArithmeticalOperator) -> Self {
-        match value {
-            ArithmeticalOperator::Add => ArithmeticalOperation::Addition,
-            ArithmeticalOperator::Subtract => ArithmeticalOperation::Subtraction,
-            ArithmeticalOperator::Multiply => ArithmeticalOperation::Multiplication,
-            ArithmeticalOperator::Divide => ArithmeticalOperation::Division,
-        }
-    }
-}
-
-impl From<&ArithmeticalOperator> for ArithmeticalOperation {
-    fn from(value: &ArithmeticalOperator) -> Self {
-        match value {
-            ArithmeticalOperator::Add => ArithmeticalOperation::Addition,
-            ArithmeticalOperator::Subtract => ArithmeticalOperation::Subtraction,
-            ArithmeticalOperator::Multiply => ArithmeticalOperation::Multiplication,
-            ArithmeticalOperator::Divide => ArithmeticalOperation::Division,
-        }
-    }
-}
-
-impl From<InequalityOperator> for InequalityOperation {
-    fn from(value: InequalityOperator) -> Self {
-        match value {
-            InequalityOperator::Greater => InequalityOperation::Greater,
-            InequalityOperator::Smaller => InequalityOperation::Smaller,
-            InequalityOperator::GreaterOrEq => InequalityOperation::GreaterOrEq,
-            InequalityOperator::SmallerOrEq => InequalityOperation::SmallerOrEq,
-        }
-    }
-}
-
-impl From<&InequalityOperator> for InequalityOperation {
-    fn from(value: &InequalityOperator) -> Self {
-        match value {
-            InequalityOperator::Greater => InequalityOperation::Greater,
-            InequalityOperator::Smaller => InequalityOperation::Smaller,
-            InequalityOperator::GreaterOrEq => InequalityOperation::GreaterOrEq,
-            InequalityOperator::SmallerOrEq => InequalityOperation::SmallerOrEq,
-        }
-    }
-}
-
-impl ToString for ArithmeticalOperation {
-    fn to_string(&self) -> String {
-        match self {
-            ArithmeticalOperation::Addition => "addition".into(),
-            ArithmeticalOperation::Subtraction => "subtraction".into(),
-            ArithmeticalOperation::Multiplication => "multiplication".into(),
-            ArithmeticalOperation::Division => "division".into()
-        }
-    }
-}
-
-impl ToString for InequalityOperation {
-    fn to_string(&self) -> String {
-        match self {
-            InequalityOperation::Greater => "greater then".into(),
-            InequalityOperation::Smaller => "smaller then".into(),
-            InequalityOperation::GreaterOrEq => "greater or equal to".into(),
-            InequalityOperation::SmallerOrEq => "smaller or equal to".into(),
-        }
-    }
-}
-
-impl ToString for Operator {
-    fn to_string(&self) -> String {
-        match self {
-            Operator::Logical(l) => l.to_string(),
-            Operator::Arithmetical(a) => a.to_string(),
-            Operator::Inequality(i) => i.to_string(),
-            Operator::Dot => ".".into(),
-            Operator::Concatination => "&".into()
-        }
-    }
-}
-
-impl Expression {
-    pub fn to_json_string(&self) -> String {
-        match self {
-            Expression::String(string) => format!("\"{}\"", string),
-            Expression::Integer(int) => format!("{}", int),
-            Expression::Float(float) => format!("{}", float),
-            Expression::Void => "void".into(),
-            Expression::GlobalCall { name, args } => {
-                let args_str: Vec<String> = args
-                    .iter()
-                    .map(|n| n.to_json_string())
+            PostOperator::FunctionCall(args) => {
+                let args_vec: Vec<String> = args.iter()
+                    .map(|a| format!("{:?}", a))
                     .collect();
 
-                format!("{}({})", &name, args_str.join(","))
+                write!(f, "({})", args_vec.join(", "))
             },
-            Expression::LinearList(list) => {
-                let list_str: Vec<String> = list
-                    .iter()
-                    .map(|n| n.to_json_string())
-                    .collect();
 
-                format!("[{}]", list_str.join(","))
+            PostOperator::MemberAccess(name) => {
+                write!(f, ".{}", name)
             },
-            Expression::PropertyList(props) => {
-                let props_list: Vec<String> = props
-                    .iter()
-                    .map(|(key, value)| format!("\"{}\":{}", &key, value.to_json_string()))
-                    .collect();
 
-                String::from("{")
-                    + &format!("{}", props_list.join(","))
-                    + "}"
+            PostOperator::Slice { begin, end } => {
+                write!(f, "[{:?}..{:?}]", begin, end)
             },
-            
-            Expression::Operation {
-                operator: operation,
-                left,
-                right
-            } => {
-                String::from("{")
-                    + &format!("\"arithmetical_operation\":{},\"left\":{},\"right\":{}",
-                               operation.to_string(),
-                               left.to_json_string(),
-                               right.to_json_string()
-                    )
-                    + "}"
-            }
+
+            PostOperator::Index(index) => {
+                write!(f, "[{:?}]", index)
+            },
         }
     }
+}
 
-    pub fn to_json_string_pretty(&self) -> String {
-        match self {
-            Expression::String(string) => format!("\"{}\"", string),
-            Expression::Integer(int) => format!("{}", int),
-            Expression::Float(float) => format!("{}", float),
-            Expression::Void => "void".into(),
-            Expression::GlobalCall { name, args } => {
-                let args_str: Vec<String> = args
-                    .iter()
-                    .map(|n| n.to_json_string())
-                    .collect();
-
-                format!("{}({})", &name, args_str.join(", "))
-            },
-            Expression::LinearList(list) => {
-                let list_str: Vec<String> = list
-                    .iter()
-                    .map(|n| n.to_json_string())
-                    .collect();
-
-                format!("[\n\t{}\n]", list_str.join(",\n\t"))
-            },
-            Expression::PropertyList(props) => {
-                let props_list: Vec<String> = props
-                    .iter()
-                    .map(|(key, value)| format!("\"{}\": {}", &key, value.to_json_string()))
-                    .collect();
-
-                String::from("{\n\t")
-                    + &format!("{}", props_list.join(",\n\t"))
-                    + "}"
-            },
-            
-            Expression::Operation {
-                operator: operation,
-                left,
-                right
-            } => {
-                String::from("{")
-                    + &format!("\n\t\"arithmetical_operation\":{},\n\t\"left\":{},\n\t\"right\":{}",
-                               operation.to_string(),
-                               left.to_json_string_pretty(),
-                               right.to_json_string_pretty()
-                )
-                    + "}"
-            }
-        }
+fn op_precedence(op: &tokens::Operator) -> u8 {
+    match op {
+        tokens::Operator::Dot => 6,
+        tokens::Operator::Contains => 1,
+        tokens::Operator::Starts => 1,
+        tokens::Operator::Concatenation => 2,
+        tokens::Operator::SpaceConcatenation => 2,
+        tokens::Operator::Or => 4,
+        tokens::Operator::And => 4,
+        tokens::Operator::Addition => 3,
+        tokens::Operator::Subtraction => 3,
+        tokens::Operator::Multiplication => 4,
+        tokens::Operator::Division => 4,
+        tokens::Operator::Mod => 4,
+        tokens::Operator::Inequality => 1,
+        tokens::Operator::Greater => 1,
+        tokens::Operator::Smaller => 1,
+        tokens::Operator::GreaterOrEqual => 1,
+        tokens::Operator::SmallerOrEqual => 1,
+        tokens::Operator::AssignmentOrEquality => 0,
+        tokens::Operator::Not => 5
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum TokensParseError {
-    #[error("unexpected logical operator")]
-    UnexpectedLogicalOperator(LogicalOperator),
+    #[error("unexpected concatenation operator")]
+    UnexpectedConcatenationOperator,
 
-    #[error("unexpected arithmetical operator")]
-    UnexpectedArithmeticalOperator(ArithmeticalOperator),
-
-    #[error("unexpected inequality operator")]
-    UnexpectedInequalityOperator(InequalityOperator),
-
-    #[error("unexpected concatination operator")]
-    UnexpectedConcatincationOperator,
+    #[error("unexpected operator")]
+    UnexpectedOperator(tokens::Operator),
 
     #[error("unexpected token: {:?}", character)]
     UnexpectedToken { character: String },
@@ -300,23 +256,16 @@ pub enum TokensParseError {
     #[error("out of range")]
     OutOfRange,
 
-    #[error("unsatisfied logical operator")]
-    UnsatisfiedLogicalOperator(LogicalOperator),
-
-    #[error("unsatisfied arithmetical operator")]
-    UnsatisfiedArithmeticalOperator(ArithmeticalOperator),
-
     #[error("unsatisfied inequality operator")]
-    UnsatisfiedInequalityOperator(InequalityOperator),
-
-    #[error("unsatisfied inequality operator")]
-    UnsatisfiedConcatinationOperator,    
+    UnsatisfiedConcatenationOperator,    
 
     #[error("undefined constant \"{}\"", constant)]
     UndefinedConstant { constant: String }
 }
 
-fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, usize), TokensParseError> {
+fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> Result<(Expression, usize), TokensParseError> {
+    debug!("recursive call (min_prec: {})", min_precedence);
+
     if tokens.is_empty() { return Err(TokensParseError::EmptyTokens); }
 
     let length = tokens.len();
@@ -325,10 +274,9 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
 
     if begin >= length { return Err(TokensParseError::OutOfRange); }
 
-    debug!("parsing at ({})", begin);
-
     let current = &tokens[begin];
 
+    let mut parse_res: Result<_, _> = Err(TokensParseError::EmptyTokens);
     match current {
         Token::OpenBracket => {
             debug!("parsing a collection at ({})", begin);
@@ -339,23 +287,25 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
             let mut is_prop = false;
             begin += 1;
 
-            while begin < length {
+            'collection_loop: while begin < length {
                 match &tokens[begin] {
 
                     Token::CloseBracket => {
                         // are trailing commas allowed?
-                        if commad {
+                        if commad && if is_prop { !map.is_empty() } else { !sub_nodes.is_empty() } {
                             error!("unexpected trailing comma at ({})", begin);
                             return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
                         }
 
                         if is_prop {
                             debug!("done parsing property list at ({})", begin);
-                            return Ok((Expression::PropertyList(map), begin));
+                            parse_res = Ok((Expression::PropertyList(map), begin));
+                            break 'collection_loop;
                         }
 
                         debug!("done parsing linear list at ({})", begin);
-                        return Ok((Expression::LinearList(sub_nodes.into()), begin));
+                        parse_res = Ok((Expression::LinearList(sub_nodes.into()), begin));
+                        break 'collection_loop;
                     },
 
                     Token::Colon => {
@@ -410,7 +360,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
 
                             _ => {
                                 debug!("parsing a property value sub-expression at ({})", value_pos);
-                                let (node, reached) = parse_tokens_helper(&tokens, value_pos)?;
+                                let (node, reached) = parse_tokens_helper(&tokens, value_pos, 0)?;
 
                                 map.insert(Rc::clone(key), node);
                                 begin = reached;
@@ -442,7 +392,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
                         }
 
                         debug!("parsing a linear list sub-expression at ({})", begin);
-                        let (node, reached) = parse_tokens_helper(&tokens, begin)?;
+                        let (node, reached) = parse_tokens_helper(&tokens, begin, 0)?;
 
                         sub_nodes.push(node);
                         begin = reached;
@@ -453,8 +403,68 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
                 begin += 1;
             };
 
-            error!("expected the collection to end but it didn't");
-            return Err(TokensParseError::ImbalancedCollection);
+            if parse_res.is_err() {
+                error!("expected the collection to end but it didn't");
+                return Err(TokensParseError::ImbalancedCollection);
+            }
+        },
+
+        Token::Operator(op) => {
+            let uop = UnaryOperator::try_from(op)
+                .map_err(|_| TokensParseError::UnexpectedToken { character: format!("{:?}", op) })?;
+
+            if begin + 1 >= length {
+                return Err(TokensParseError::UnexpectedEnd);
+            }
+
+            let (parsed, reached) = parse_tokens_helper(
+                tokens,
+                begin + 1,
+                5
+            )?;
+
+            parse_res = Ok(
+                (
+                    Expression::UnaryOperation {
+                        operator: uop,
+                        right: Box::new(parsed)
+                    },
+
+                    reached
+                ));
+        },
+        Token::String(string) => {
+            debug!("parsing a string at ({})", begin);
+
+            parse_res = Ok((Expression::String(Rc::clone(string)), begin));
+        },
+        Token::Integer(int) => {
+            debug!("parsing an integer at ({})", begin);
+            parse_res = Ok((Expression::Integer(*int), begin));
+        },
+        Token::Float(float) => {
+            debug!("parsing a float at ({})", begin);
+            parse_res = Ok((Expression::Float(*float), begin))
+        },
+
+        Token::OpenParenthesis => {
+            // Handle operations such as (a + b), (a || b), and (a < b)
+
+            // First, find the closer
+
+
+
+            return Err(TokensParseError::UnexpectedEnd);
+        },
+
+
+        Token::Comma => {
+            error!("unexpected token at ({})", begin);
+            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
+        },
+        Token::Colon => {
+            error!("unexpected token at ({})", begin);
+            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Colon) });
         },
         Token::CloseBracket => {
             error!("unexpected token at ({})", begin);
@@ -464,298 +474,249 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize) -> Result<(Expression, u
             error!("unexpected token at ({})", begin);
             return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::CloseParenthesis) });
         },
-        Token::OpenParenthesis => {
-            // Handle operations such as (a + b), (a || b), and (a < b)
-
-            let mut left_opt: Option<Expression> = None;
-            let mut right_opt: Option<Expression> = None;
-            let mut op_opt: Option<Operator> = None;
-
-            begin += 1;
-
-            while begin < length {
-
-                match &tokens[begin] {
-
-                    Token::CloseParenthesis => {
-                        if left_opt.is_none() || right_opt.is_none() || op_opt.is_none() {
-                            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::CloseParenthesis) });
-                        }
-
-                        return Ok((
-                            Expression::Operation { 
-                                operator: op_opt.unwrap(), 
-                                left: Box::new(left_opt.unwrap()), 
-                                right: Box::new(right_opt.unwrap()) 
-                            }, 
-                            begin
-                        ));
-                    },
-
-
-                    Token::LogicalOperator(l) => {
-                        if left_opt.is_none() || op_opt.is_some() || right_opt.is_some() { 
-                            return Err(TokensParseError::UnexpectedLogicalOperator(l.clone())); 
-                        }
-
-                        op_opt = Some(Operator::Logical(l.into()))
-                    },
-
-                    Token::ArithmeticalOperator(a) => {
-                        if left_opt.is_none() || op_opt.is_some() || right_opt.is_some() { 
-                            return Err(TokensParseError::UnexpectedArithmeticalOperator(a.clone())); 
-                        }
-
-                        op_opt = Some(Operator::Arithmetical(a.into()))
-                    },
-
-                    Token::InequalityOperator(i) => {
-                        if left_opt.is_none() || op_opt.is_some() || right_opt.is_some() { 
-                            return Err(TokensParseError::UnexpectedInequalityOperator(i.clone())); 
-                        }
-
-                        op_opt = Some(Operator::Inequality(i.into()))
-                    },
-
-                    Token::Dot => {
-                        if left_opt.is_none() || op_opt.is_some() || right_opt.is_some() { 
-                            return Err(TokensParseError::UnexpectedToken {character: format!("{:?}", Token::Dot)}); 
-                        }
-
-                        op_opt = Some(Operator::Dot)
-                    }
-
-                    Token::MapKey(_) | Token::Comma |
-                    Token::Colon | Token::Concatenation |
-                    Token::CloseBracket => {
-                        
-                        return Err(TokensParseError::UnexpectedToken { character: "".into() });
-                    },
-
-                    t => {
-
-                        let (node, new_cursor) = parse_tokens_helper(tokens, begin)?;
-                    
-                        match (&left_opt, &op_opt, &right_opt) {
-                            (None, None, None) => { left_opt = Some(node) },
-                            (Some(_), Some(_), None) => { right_opt = Some(node) },
-                            _ => {
-                                return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", t) });
-                            }
-                        }
-
-                        begin = new_cursor;
-                    }
-                }
-
-                begin += 1;
-            };
-
-            return Err(TokensParseError::UnexpectedEnd);
-        },
-        Token::Comma => {
-            error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
-        },
-        Token::Colon => {
-            error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Colon) });
-        },
-        Token::Concatenation => {
-            error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Concatenation) });
-        },
         Token::MapKey(m) => {
             error!("unexpected token at ({})", begin);
             return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::MapKey(Rc::clone(m))) });
         },
-        Token::Void => {
-            debug!("parsing void at ({})", begin);
-            return Ok((Expression::Void, begin));
+        Token::Range => {
+            error!("unexpected range token at ({})", begin);
+            return Err(TokensParseError::UnexpectedToken { character: "..".into() });
         },
-        Token::String(string) => {
-            debug!("parsing a string at ({})", begin);
 
-            let mut next = begin + 1;
+        Token::Identifier(i) => {
+            debug!("parsing an identifier at ({})", begin);
+            parse_res = Ok((Expression::Identifier(Rc::clone(i)), begin));
+        }
 
-            let expr = Expression::String(Rc::clone(string));
+        Token::Keyword(k) => {
+            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", k) });
+        }
+    }
 
-            let mut op_opt: Option<Operator> = None;
-            
-            if next < length {
-                match &tokens[next] {
-                    Token::LogicalOperator(lp) => {
-                        if op_opt.is_some() {
-                            return Err(TokensParseError::UnexpectedLogicalOperator(lp.clone()));
+    let (parsed, reached) = parse_res.unwrap();
+    begin = reached;
+    let mut subtree = parsed;
+
+    'op_loop: while begin + 1 < length {
+
+        match &tokens[begin + 1] {
+            // function call
+            Token::OpenParenthesis => {
+                debug!("parsing function arguments at ({})", begin + 1);
+
+                let mut commad = true;
+                let mut next = begin + 2;
+
+                let mut args = vec![];
+
+                while next < length {
+                    match &tokens[next] {
+                        Token::CloseParenthesis => {
+                            if commad {
+                                debug!("unexpected trailing comma at ({})", next);
+                                return Err(TokensParseError:: UnexpectedToken { character: ",".into() });
+                            }
+
+                            let new_subtree = Expression::PostOperation {
+                                operator: PostOperator::FunctionCall(args.into()),
+                                left: Box::new(subtree)
+                            };
+
+                            subtree = new_subtree;
+                            begin = next;
+
+                            continue 'op_loop;
+                        },
+
+                        Token::Comma => {
+                            if commad {
+                                debug!("unexpected comma at ({})", next);
+                                return Err(TokensParseError::UnexpectedToken { character: ",".into() });
+                            }
+
+                            commad = true;
+                            next += 1;
+                        },
+
+                        _ => {
+                            if !commad {
+                                debug!("expected a comma at ({})", next);
+                                return Err(TokensParseError::ExpectedToken { character: ',' });
+                            }
+
+                            debug!("parsing function argument #{} at ({})", args.len() + 1, next);
+
+                            let (parsed, reached) = parse_tokens_helper(
+                                tokens,
+                                next,
+                                0
+                            )?;
+
+                            next = reached + 1;
+                            args.push(parsed);
+                            commad = false;
                         }
-
-                        op_opt = Some(Operator::Logical(lp.into()));
-                        next += 1;
-                    },
-
-                    Token::InequalityOperator(ip) => {
-                        if op_opt.is_some() {
-                            return Err(TokensParseError::UnexpectedInequalityOperator(ip.clone()));
-                        }
-
-                        op_opt = Some(Operator::Inequality(ip.into()));
-                        next += 1;
-                    },
-
-                    Token::ArithmeticalOperator(ap) => {
-                        if op_opt.is_some() {
-                            return Err(TokensParseError::UnexpectedArithmeticalOperator(ap.clone()));
-                        }
-
-                        op_opt = Some(Operator::Arithmetical(ap.into()));
-                        next += 1;
-                    },
-
-                    Token::Concatenation => {
-                        if op_opt.is_some() {
-                            return Err(TokensParseError::UnexpectedConcatincationOperator);
-                        }
-
-                        op_opt = Some(Operator::Concatination);
-                        next += 1;
-                    },
-
-                    Token::Dot => {
-                        op_opt = Some(Operator::Dot);
-                        next += 1;
-                    },
-
-                    _ => {}
+                    }
                 }
-            }
+            },
 
-            if op_opt.is_none() {
-                return Ok((expr, next - 1));
-            }
-
-            debug!("parsing the right side of the operation at ({})", next);
-            
-            let res = parse_tokens_helper(&tokens, next)?;
-            
-            return Ok((
-                Expression::Operation { 
-                    operator: op_opt.unwrap(), 
-                    left: Box::new(expr), 
-                    right: Box::new(res.0) 
-                },
-                res.1
-            ));
-        },
-        Token::Integer(int) => {
-            debug!("parsing an integer at ({})", begin);
-            return Ok((Expression::Integer(*int), begin));
-        },
-        Token::Float(float) => {
-            debug!("parsing a float at ({})", begin);
-            return Ok((Expression::Float(*float), begin))
-        },
-        Token::Constant(constant) => {
-            debug!("parsing a constant at ({})", begin);
-
-            return match constant.deref() {
-                "RETURN" => Ok((Expression::String( "\n".into()), begin)),
-                "SPACE"  => Ok((Expression::String(  " ".into()), begin)),
-                "PI"     => Ok((Expression::Float(PI), begin)),
-
-                _ => Err(TokensParseError::UndefinedConstant { constant: String::from(constant.as_ref()) })
-            }
-        },
-
-        Token::GlobalCall(name) => {
-            debug!("parsing a global call at ({})", begin);
-
-            let open_pos = begin + 1;
-
-            if open_pos >= length {
-                error!("expected an opening parenthesis at ({})", open_pos);
-                return Err(TokensParseError::UnexpectedEnd);
-            }
-
-            match &tokens[open_pos] {
-                Token::OpenParenthesis => (),
-                _ => {
-                    error!("expected an opening parenthesis at ({})", open_pos);
-                    return Err(TokensParseError::ExpectedToken { character: '(' });
+            // indexing and slicing
+            Token::OpenBracket => {
+                if begin + 2 >= length {
+                    return Err(TokensParseError::UnexpectedEnd);
                 }
-            };
 
-            let mut args = vec![];
-            let mut commad = true;
+                let (parsed_in, reached) = parse_tokens_helper(
+                    tokens,
+                    begin + 2,
+                    0
+                )?;
 
-            begin += 2;
+                match &tokens[reached + 1] {
+                    Token::Range => {
+                        debug!("parsing a range at ({})", reached + 1);
 
-            while begin < length {
-
-                match &tokens[begin] {
-                    Token::CloseParenthesis => {
-                        if commad {
-                            error!("unexpected trailing comma at ({})", begin);
-                            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
+                        if reached + 2 >= length {
+                            return Err(TokensParseError::UnexpectedEnd);
                         }
 
-                        debug!("global call arguments parsing done at ({})", begin);
-                        return Ok((Expression::GlobalCall { name: Rc::clone(name), args: args.into() }, begin));
+                        let (parsed_end, end_reached) = parse_tokens_helper(
+                            tokens,
+                            reached + 2,
+                            0
+                        )?;
+
+                        match &tokens[end_reached + 1] {
+                            Token::CloseBracket => {
+                                let new_subtree = Expression::PostOperation {
+                                    operator: PostOperator::Slice {
+                                        begin: Box::new(parsed_in),
+                                        end: Box::new(parsed_end)
+                                    },
+
+                                    left: Box::new(subtree)
+                                };
+
+                                subtree = new_subtree;
+                                begin = end_reached + 1;
+                            },
+
+                            t => {
+                                return Err(TokensParseError::UnexpectedToken {
+                                    character: format!("{:?}", t)
+                                })
+                            }
+                        }
                     },
 
-                    Token::Comma => {
-                        if commad {
-                            error!("unexpected comma at ({})", begin);
-                            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
-                        }
+                    Token::CloseBracket => {
+                        debug!("parsed an indexing operator. ends at ({})", reached + 1);
+                        let new_subtree = Expression::PostOperation {
+                            operator: PostOperator::Index(Box::new(parsed_in)),
+                            left: Box::new(subtree)
+                        };
 
-                        commad = true;
+                        subtree = new_subtree;
+                        begin = reached + 1;
+                    },
+
+                    t => {
+                        return Err(TokensParseError::UnexpectedToken {
+                            character: format!("{:?}", t)
+                        });
+                    }
+                }
+            },
+
+            Token::Operator(op) => {
+                debug!("found an operator ({:?}) at ({})", op, begin + 1);
+
+                // looking for member access operator
+                match op {
+                    tokens::Operator::Dot => {
+
+                        match &tokens[begin + 2] {
+                            Token::Identifier(identifier) => {
+                                let new_subtree = Expression::PostOperation {
+                                    operator: PostOperator::MemberAccess(Rc::clone(identifier)),
+                                    left: Box::new(subtree)
+                                };
+
+                                begin += 2;
+                                subtree = new_subtree;
+
+                                continue 'op_loop;
+                            },
+
+                            t => {
+                                return Err(
+                                    TokensParseError::UnexpectedToken {
+                                        character: format!("{:?}", &t)
+                                    }
+                                );
+                            }
+                        }
+                    },
+
+                    _ => ()
+                }
+                //
+
+                let mut precedence = op_precedence(op);
+
+                let bop = match op {
+                    tokens::Operator::AssignmentOrEquality => {
+                        if min_precedence > 0 {
+                            precedence = 1;
+                            debug!("determined to be an equality operator");
+                            BinaryOperator::Equal
+                        } else {
+                            precedence = 0;
+                            debug!("determined to be an assignment operator");
+                            BinaryOperator::Assignment
+                        }
                     },
 
                     _ => {
-                        if !commad {
-                            error!("expected a comma at ({})", begin);
-                            return Err(TokensParseError::ExpectedToken { character: ',' });
-                        }
-
-                        commad = false;
-
-                        debug!("parsing global call argument #{} at ({})", args.len(), begin);
-                        let (node, reached) = parse_tokens_helper(&tokens, begin)?;
-
-                        args.push(node);
-                        begin = reached;
-                        debug!("parsing global call argument #{} done at ({})", args.len(), begin);
-
+                        BinaryOperator::try_from(op)
+                            .map_err(|_| TokensParseError::UnexpectedToken {
+                                character: format!("{:?}", op.clone())
+                            })?
                     }
+                };
+
+                if precedence < min_precedence {
+                    break 'op_loop;
                 }
 
-                begin += 1;
-            }
+                debug!("parsing the right side of the operator at ({})", begin + 2);
 
-            error!("expected the global call arguments to end but they didn't");
-            return Err(TokensParseError::ImbalancedCollection);
-        },
+                let (right, right_reached) = parse_tokens_helper(
+                    tokens,
+                    begin + 2,
+                    precedence + 1
+                )?;
 
-        Token::LogicalOperator(op) => {
-            return Err(TokensParseError::UnsatisfiedLogicalOperator(op.clone()));
-        },
+                let new_subtree = Expression::BinaryOperation {
+                    operator: bop,
+                    left: Box::new(subtree),
+                    right: Box::new(right)
+                };
 
-        Token::ArithmeticalOperator(op) => {
-            return Err(TokensParseError::UnsatisfiedArithmeticalOperator(op.clone()));
-        },
+                subtree = new_subtree;
+                begin = right_reached;
+            },
 
-        Token::InequalityOperator(ip) => {
-            return Err(TokensParseError::UnexpectedInequalityOperator(ip.clone()));
-        },
-
-        Token::Dot => {
-            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Dot) });
+            _ => break 'op_loop
         }
     }
+
+
+    Ok((subtree, begin))
 }
 
 pub fn parse_tokens<T : AsRef<[Token]>>(tokens: T) -> Result<Expression, TokensParseError> {
-    match parse_tokens_helper(tokens.as_ref(), 0) {
+    match parse_tokens_helper(tokens.as_ref(), 0, 0) {
         Ok((node, _)) => Ok(node),
         Err(e) => Err(e)
     }

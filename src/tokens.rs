@@ -1,61 +1,39 @@
 use log::error;
 use std::{
-    num::{ParseFloatError, ParseIntError},
-    rc::Rc,
+    num::{ParseFloatError, ParseIntError}, ops::Deref, rc::Rc
 };
+use std::fmt::Display;
 use thiserror;
 
 #[derive(Debug, Clone)]
-pub enum LogicalOperator {
-    Or,
-    And,
+pub enum Operator {
+    Dot,                    // .
+    Concatenation,          // &
+    SpaceConcatenation,     // &&
+    Not,                    // not
+    Or,                     // or
+    And,                    // and
+    Addition,               // +
+    Subtraction,            // -
+    Multiplication,         // *
+    Division,               // /
+    Mod,                    // %
+    Inequality,             // <>
+    Greater,                // >    
+    Smaller,                // <
+    GreaterOrEqual,         // >=
+    SmallerOrEqual,         // <=
+    AssignmentOrEquality,   // =
+    Contains,               // contains
+    Starts                  // starts
 }
 
-#[derive(Debug, Clone)]
-pub enum InequalityOperator {
-    Greater,
-    Smaller,
-    GreaterOrEq,
-    SmallerOrEq,
-}
-
-#[derive(Debug, Clone)]
-pub enum ArithmeticalOperator {
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-}
-
-impl ToString for LogicalOperator {
-    fn to_string(&self) -> String {
-        match self {
-            LogicalOperator::Or => "or".into(),
-            LogicalOperator::And => "and".into(),
-        }
-    }
-}
-
-impl ToString for ArithmeticalOperator {
-    fn to_string(&self) -> String {
-        match self {
-            ArithmeticalOperator::Add => "add".into(),
-            ArithmeticalOperator::Subtract => "subtract".into(),
-            ArithmeticalOperator::Multiply => "multiply".into(),
-            ArithmeticalOperator::Divide => "divide".into(),
-        }
-    }
-}
-
-impl ToString for InequalityOperator {
-    fn to_string(&self) -> String {
-        match self {
-            InequalityOperator::Greater => "greater".into(),
-            InequalityOperator::Smaller => "smaller".into(),
-            InequalityOperator::GreaterOrEq => "greater or equal".into(),
-            InequalityOperator::SmallerOrEq => "smaller or equal".into(),
-        }
-    }
+#[derive(Debug)]
+pub enum Keyword {
+    Global,
+    Switch,
+    Function,
+    Void
 }
 
 #[derive(Debug)]
@@ -68,20 +46,17 @@ pub enum Token {
 
     Comma,
     Colon,
-    Dot,
-    Concatenation,
-    LogicalOperator(LogicalOperator),
-    ArithmeticalOperator(ArithmeticalOperator),
-    InequalityOperator(InequalityOperator),
-
-    Void,
+    Range,
+    
+    Operator(Operator),
 
     String(Rc<str>),
     Integer(i32),
     Float(f32),
     MapKey(Rc<str>),
-    GlobalCall(Rc<str>),
-    Constant(Rc<str>),
+
+    Identifier(Rc<str>),
+    Keyword(Keyword)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -122,7 +97,7 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
 
     let mut tokens = vec![];
 
-    while let Some(current) = chars.next() {
+    'main_loop: while let Some(current) = chars.next() {
         match current {
             ' ' => {
                 continue;
@@ -152,40 +127,64 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
             '>' => {
                 if let Some(next) = chars.peek() {
                     if *next == '=' {
-                        tokens.push(Token::InequalityOperator(InequalityOperator::GreaterOrEq));
+                        tokens.push(Token::Operator(Operator::GreaterOrEqual));
                         chars.next();
                         continue;
                     }
                 }
 
-                tokens.push(Token::InequalityOperator(InequalityOperator::Greater));
+                tokens.push(Token::Operator(Operator::Greater));
             }
             '<' => {
                 if let Some(next) = chars.peek() {
                     if *next == '=' {
-                        tokens.push(Token::InequalityOperator(InequalityOperator::SmallerOrEq));
+                        tokens.push(Token::Operator(Operator::SmallerOrEqual));
+                        chars.next();
+                        continue;
+                    } else if *next == '>' {
+                        tokens.push(Token::Operator(Operator::Inequality));
                         chars.next();
                         continue;
                     }
                 }
 
-                tokens.push(Token::InequalityOperator(InequalityOperator::Smaller));
+                tokens.push(Token::Operator(Operator::Smaller));
+            }
+
+            '=' => {
+                // if let Some(next) = chars.peek() {
+                //     if *next == '=' {
+                //         tokens.push(Token::Operator(Operator::Equality));
+                //         chars.next();
+                //         continue;
+                //     }
+                // }
+
+                tokens.push(Token::Operator(Operator::AssignmentOrEquality));
             }
 
             '&' => {
                 if let Some(next) = chars.peek() {
                     if *next == '&' {
-                        tokens.push(Token::LogicalOperator(LogicalOperator::And));
+                        tokens.push(Token::Operator(Operator::SpaceConcatenation));
 
                         chars.next();
                         continue;
                     }
                 }
 
-                tokens.push(Token::Concatenation);
+                tokens.push(Token::Operator(Operator::Concatenation));
             }
 
             '.' => {
+                if let Some(next) = chars.peek() {
+                    if *next == '.' {
+                        chars.next();
+                        tokens.push(Token::Range);
+                        continue;
+                    }
+                }
+
                 let mut buffer = String::with_capacity(2);
                 buffer.push('.');
 
@@ -212,59 +211,113 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                     continue;
                 }
 
-                tokens.push(Token::Dot);
+                tokens.push(Token::Operator(Operator::Dot));
             }
 
             '|' => {
-                if let Some(next) = chars.peek() {
-                    if *next == '|' {
-                        tokens.push(Token::LogicalOperator(LogicalOperator::Or));
+                // if let Some(next) = chars.peek() {
+                //     if *next == '|' {
+                //         tokens.push(Token::Operator(Operator::Or));
 
-                        chars.next();
-                        continue;
-                    }
-                }
+                //         chars.next();
+                //         continue;
+                //     }
+                // }
 
                 return Err(TokenizeError::UnexpectedToken { character: '|' });
             }
 
             '+' => {
-                tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Add));
+                tokens.push(Token::Operator(Operator::Addition));
             }
             '-' => {
-                tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Subtract));
+                tokens.push(Token::Operator(Operator::Subtraction));
             }
             '*' => {
-                tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Multiply));
+                tokens.push(Token::Operator(Operator::Multiplication));
             }
             '/' => {
-                tokens.push(Token::ArithmeticalOperator(ArithmeticalOperator::Divide));
+                tokens.push(Token::Operator(Operator::Division));
             }
 
             '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
                 let mut buffer = String::with_capacity(1);
+                let mut buffer2 = String::new();
+                let mut buffer3 = String::new();
+
+                let mut plusnegative = false;
+
                 buffer.push(current);
+
                 let mut is_float = false;
 
                 while let Some(next) = chars.peek() {
                     if next.is_digit(10) {
-                        buffer.push(*next);
+                        if buffer3.is_empty() {
+                            if is_float {
+                                buffer2.push(*next);
+                            } else {
+                                buffer.push(*next);
+                            }
+                        } else {
+                            buffer3.push(*next);
+                        }
+
                         chars.next();
                     } else if *next == '.' {
                         if is_float {
+                            if buffer2.is_empty() {
+                                let combined = format!("{buffer}{buffer3}");
+
+                                match combined.parse::<i32>() {
+                                    Ok(number) => {
+                                        tokens.push(Token::Integer(number));
+                                    }
+                                    Err(e) => {
+                                        return Err(TokenizeError::IntParse { err: e });
+                                    }
+                                }
+
+                                tokens.push(Token::Range);
+                                chars.next();
+                                buffer2.clear();
+                                continue 'main_loop;
+                            }
+
                             return Err(TokenizeError::DoubleDecimalPoint);
                         } else {
-                            buffer.push(*next);
                             chars.next();
                             is_float = true;
                         }
+                    } else if *next == 'e' {
+                        if !buffer3.is_empty() {
+                            return Err(TokenizeError::UnexpectedToken { character: *next });
+                        }
+
+                        buffer3.push(*next);
+
+                        chars.next();
+                    } else if buffer3.is_empty() && (*next == '-' || *next == '+') {
+                        if plusnegative {
+                            return Err(TokenizeError::UnexpectedToken { character: *next });
+                        }
+
+                        buffer3.push(*next);
+                        chars.next();
+                        plusnegative = true;
                     } else {
                         break;
                     }
                 }
 
+                let combined = if is_float {
+                    format!("{buffer}.{buffer2}{buffer3}")
+                } else {
+                    format!("{buffer}{buffer3}")
+                };
+
                 if is_float {
-                    match buffer.parse::<f32>() {
+                    match combined.parse::<f32>() {
                         Ok(number) => {
                             tokens.push(Token::Float(number));
                         }
@@ -273,7 +326,7 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                         }
                     }
                 } else {
-                    match buffer.parse::<i32>() {
+                    match combined.parse::<i32>() {
                         Ok(number) => {
                             tokens.push(Token::Integer(number));
                         }
@@ -317,27 +370,51 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                 tokens.push(Token::String(buffer.into()));
             }
 
-            _ => {
+            c => {
                 let mut buffer = String::with_capacity(1);
+                buffer.push(c);
 
                 if !current.is_alphanumeric() && current != '_' {
                     return Err(TokenizeError::UnexpectedToken { character: current });
                 }
 
-                while let Some(next) = chars.next() {
-                    if next.is_alphanumeric() || next == '_' {
-                        buffer.push(next);
+                while let Some(next) = chars.peek() {
+                    if next.is_alphanumeric() || *next == '_' {
+                        buffer.push(*next);
+                        chars.next();
                     } else {
                         break;
                     }
                 }
 
-                if buffer == "void" {
-                    tokens.push(Token::Void);
-                } else if current == '(' {
-                    tokens.push(Token::GlobalCall(buffer.into()));
-                } else {
-                    tokens.push(Token::Constant(buffer.into()));
+                match buffer.deref() {
+                    "void" => {
+                        tokens.push(Token::Keyword(Keyword::Void));
+                    },
+
+                    "contains" => {
+                        tokens.push(Token::Operator(Operator::Contains));
+                    },
+
+                    "starts" => {
+                        tokens.push(Token::Operator(Operator::Starts));
+                    },
+
+                    "and" => {
+                        tokens.push(Token::Operator(Operator::And));
+                    },
+
+                    "or" => {
+                        tokens.push(Token::Operator(Operator::Or));
+                    },
+
+                    "not" => {
+                        tokens.push(Token::Operator(Operator::Not));
+                    },
+
+                    _ => {
+                        tokens.push(Token::Identifier(buffer.into()))
+                    }
                 }
             }
         }
