@@ -2,8 +2,7 @@ use std::{
     collections::HashMap,
     rc::Rc
 };
-use std::f32::consts::PI;
-use std::fmt::{Display, format, Formatter};
+use std::fmt::{Display, Formatter};
 use crate::tokens::{self, Operator, Token};
 use thiserror;
 use log::{debug, error};
@@ -31,9 +30,7 @@ pub enum BinaryOperator {
     Starts,
 
     Concatenation,
-    SpaceConcatenation,
-
-    Assignment
+    SpaceConcatenation
 }
 
 #[derive(Debug)]
@@ -60,6 +57,7 @@ pub enum PostOperator {
 #[derive(Debug)]
 pub enum Expression {
     String(Rc<str>),
+    Symbol(Rc<str>),
     Integer(i32),
     Float(f32),
 
@@ -85,6 +83,37 @@ pub enum Expression {
     },
 
     Void
+}
+
+#[derive(Debug)]
+pub struct SwitchCase {
+    pub case: Box<[Expression]>,
+    pub block: Box<[Instruction]>
+}
+
+#[derive(Debug)]
+pub enum Instruction {
+    Assignment {
+        identifier: Rc<str>,
+        expression: Box<Expression>
+    },
+
+    Conditional {
+        condition: Box<Expression>,
+
+        positive: Box<[Instruction]>,
+        negative: Box<[Instruction]>
+    },
+
+    Switch {
+        condition: Box<Expression>,
+        cases: Box<[SwitchCase]>
+    },
+
+    GlobalCall {
+        name: Rc<str>,
+        args: Box<[Expression]>
+    }
 }
 
 impl TryFrom<&tokens::Operator> for BinaryOperator {
@@ -114,6 +143,7 @@ impl TryFrom<&tokens::Operator> for BinaryOperator {
             tokens::Operator::Smaller => Ok(Smaller),
             tokens::Operator::GreaterOrEqual => Ok(GreaterOrEqual),
             tokens::Operator::SmallerOrEqual => Ok(SmallerOrEqual),
+            tokens::Operator::AssignmentOrEquality => Ok(Equal),
 
             _ => Err(())
         }
@@ -162,7 +192,6 @@ impl Display for BinaryOperator {
             BinaryOperator::Mod => "mod",
             BinaryOperator::Equal => "=",
             BinaryOperator::NotEqual => "<>",
-            BinaryOperator::Assignment => "="
         })
     }
 }
@@ -317,7 +346,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                         }
                     },
 
-                    Token::MapKey(key) => {
+                    Token::Symbol(key) => {
                         debug!("parsing an identifier at ({})", begin);
 
                         if !commad {
@@ -353,7 +382,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
 
                         match &tokens[value_pos] {
                             Token::CloseBracket | Token::CloseParenthesis | Token::Colon |
-                            Token::Comma | Token::MapKey(_) => {
+                            Token::Comma | Token::Symbol(_) => {
                                 error!("illegal token for a property value at ({})", begin);
                                 return Err(TokensParseError::UnexpectedToken { character: "".into() });
                             },
@@ -448,13 +477,37 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
         },
 
         Token::OpenParenthesis => {
-            // Handle operations such as (a + b), (a || b), and (a < b)
+            // (<expression>)
 
-            // First, find the closer
+            if begin + 1 >= length {
+                error!("expected an expression or ')' at ({})", begin + 1);
+                return Err(TokensParseError::UnexpectedEnd);
+            }
 
+            debug!("parsing parenthesis sub-expression at ({})", begin + 1);
 
+            let (parsed_expr, reached) = parse_tokens_helper(
+                &tokens,
+                begin + 1,
+                0
+            )?;
 
-            return Err(TokensParseError::UnexpectedEnd);
+            if reached + 1 >= length {
+                error!("expected ')' at ({})", reached + 1);
+                return Err(TokensParseError::UnexpectedEnd);
+            }
+
+            match &tokens[reached + 1] {
+                Token::CloseParenthesis => {
+                    begin = reached + 1;
+                    parse_res = Ok((parsed_expr, begin));
+                },
+
+                t => {
+                    error!("unexpected token ({:?}) at ({})", t, reached + 1);
+                    return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", t)});
+                }
+            }
         },
 
 
@@ -474,9 +527,14 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
             error!("unexpected token at ({})", begin);
             return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::CloseParenthesis) });
         },
-        Token::MapKey(m) => {
-            error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::MapKey(Rc::clone(m))) });
+        Token::Symbol(m) => {
+            debug!("parsing symbol at ({})", begin);
+            parse_res = Ok(
+                (
+                    Expression::Symbol(Rc::clone(m)),
+                    begin
+                )
+            );
         },
         Token::Range => {
             error!("unexpected range token at ({})", begin);
@@ -662,28 +720,12 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                 }
                 //
 
-                let mut precedence = op_precedence(op);
+                let precedence = op_precedence(op);
 
-                let bop = match op {
-                    tokens::Operator::AssignmentOrEquality => {
-                        if min_precedence > 0 {
-                            precedence = 1;
-                            debug!("determined to be an equality operator");
-                            BinaryOperator::Equal
-                        } else {
-                            precedence = 0;
-                            debug!("determined to be an assignment operator");
-                            BinaryOperator::Assignment
-                        }
-                    },
-
-                    _ => {
-                        BinaryOperator::try_from(op)
-                            .map_err(|_| TokensParseError::UnexpectedToken {
-                                character: format!("{:?}", op.clone())
-                            })?
-                    }
-                };
+                let bop = BinaryOperator::try_from(op)
+                    .map_err(|_| TokensParseError::UnexpectedToken {
+                        character: format!("{:?}", op.clone())
+                    })?;
 
                 if precedence < min_precedence {
                     break 'op_loop;

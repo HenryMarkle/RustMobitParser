@@ -2,7 +2,6 @@ use log::error;
 use std::{
     num::{ParseFloatError, ParseIntError}, ops::Deref, rc::Rc
 };
-use std::fmt::Display;
 use thiserror;
 
 #[derive(Debug, Clone)]
@@ -53,7 +52,7 @@ pub enum Token {
     String(Rc<str>),
     Integer(i32),
     Float(f32),
-    MapKey(Rc<str>),
+    Symbol(Rc<str>),
 
     Identifier(Rc<str>),
     Keyword(Keyword)
@@ -353,7 +352,7 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                     return Err(TokenizeError::EmptyIdentifier);
                 }
 
-                tokens.push(Token::MapKey(buffer.into()));
+                tokens.push(Token::Symbol(buffer.into()));
             }
 
             '"' => {
