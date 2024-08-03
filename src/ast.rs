@@ -3,9 +3,10 @@ use std::{
     rc::Rc
 };
 use std::fmt::{Display, Formatter};
-use crate::tokens::{self, Operator, Token};
+use crate::tokens::{self, Operator, Token, Keyword};
 use thiserror;
-use log::{debug, error};
+use log::{debug, error, trace};
+
 
 #[derive(Debug)]
 pub enum BinaryOperator {
@@ -60,6 +61,7 @@ pub enum Expression {
     Symbol(Rc<str>),
     Integer(i32),
     Float(f32),
+    Path(Rc<[Box<str>]>),
 
     LinearList(Box<[Expression]>),
     PropertyList(HashMap<Rc<str>, Expression>),
@@ -88,32 +90,47 @@ pub enum Expression {
 #[derive(Debug)]
 pub struct SwitchCase {
     pub case: Box<[Expression]>,
-    pub block: Box<[Instruction]>
+    pub block: Box<[Statement]>
 }
 
 #[derive(Debug)]
-pub enum Instruction {
+pub enum ElseConditionalBlock {
+    Else(Box<[Statement]>),
+    ElseIf(Box<ConditionalBlock>)
+}
+
+#[derive(Debug)]
+pub struct ConditionalBlock {
+    condition: Box<Expression>,
+
+    block: Box<[Statement]>,
+    else_block: Option<ElseConditionalBlock>
+}
+
+#[derive(Debug)]
+pub enum Statement {
     Assignment {
-        identifier: Rc<str>,
+        assignee: Box<Expression>,
+        specified_type: Option<Rc<str>>,
         expression: Box<Expression>
     },
 
-    Conditional {
-        condition: Box<Expression>,
-
-        positive: Box<[Instruction]>,
-        negative: Box<[Instruction]>
-    },
+    Condition(ConditionalBlock),
 
     Switch {
         condition: Box<Expression>,
         cases: Box<[SwitchCase]>
     },
 
-    GlobalCall {
-        name: Rc<str>,
-        args: Box<[Expression]>
-    }
+    Expression(Expression),
+
+    PutInto,
+    Exit,
+    Global,
+    TypeSpec,
+    Repeat,
+
+    Return
 }
 
 impl TryFrom<&tokens::Operator> for BinaryOperator {
@@ -257,7 +274,7 @@ fn op_precedence(op: &tokens::Operator) -> u8 {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum TokensParseError {
+pub enum ExpressionParseError {
     #[error("unexpected concatenation operator")]
     UnexpectedConcatenationOperator,
 
@@ -292,20 +309,82 @@ pub enum TokensParseError {
     UndefinedConstant { constant: String }
 }
 
-fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> Result<(Expression, usize), TokensParseError> {
+#[derive(Debug, thiserror::Error)]
+pub enum AssignmentParseError {
+    #[error("unexpected end")]
+    UnexpectedEnd,
+
+    #[error("failed to parse assignment's right-side expression")]
+    Expression(#[from] ExpressionParseError),
+
+    #[error("invalid assignment operator")]
+    InvalidOperator,
+
+    #[error("invalid type identifier")]
+    InvalidTypeIdentifier,
+
+    #[error("unexpected token")]
+    UnexpectedToken(String)
+}
+
+
+#[derive(Debug, thiserror::Error)]
+pub enum StatementParseError {
+    #[error("unexpected end")]
+    UnexpectedEnd,
+
+    #[error("unexpected token")]
+    UnexpectedToken(String),
+
+    #[error("failed to parse condition")]
+    ConditionalParseError(#[from] ConditionalBlockParseError),
+    
+    #[error("failed to parse assignment")]
+    Assignment(#[from] AssignmentParseError)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConditionalBlockParseError {
+    #[error("unexpected end")]
+    UnexpectedEnd,
+
+    #[error("unexpected token")]
+    UnexpectedToken(String),
+
+    #[error("failed to parse conditional expression")]
+    ExpressionParseError(#[from] ExpressionParseError),
+
+    #[error("failed to parse a statement")]
+    StatementParseError(String)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ParseError {
+
+    #[error("failed to parse expression")]
+    Expression(#[from] ExpressionParseError),
+
+    #[error("failed to parse statement")]
+    Statement(#[from] StatementParseError),
+
+    #[error("failed to parse conditition")]
+    Condition(#[from] ConditionalBlockParseError)
+}
+
+fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equals: bool) -> Result<(Expression, usize), ExpressionParseError> {
     debug!("recursive call (min_prec: {})", min_precedence);
 
-    if tokens.is_empty() { return Err(TokensParseError::EmptyTokens); }
+    if tokens.is_empty() { return Err(ExpressionParseError::EmptyTokens); }
 
     let length = tokens.len();
 
     let mut begin = cursor;
 
-    if begin >= length { return Err(TokensParseError::OutOfRange); }
+    if begin >= length { return Err(ExpressionParseError::OutOfRange); }
 
     let current = &tokens[begin];
 
-    let mut parse_res: Result<_, _> = Err(TokensParseError::EmptyTokens);
+    let mut parse_res: Result<_, _> = Err(ExpressionParseError::EmptyTokens);
     match current {
         Token::OpenBracket => {
             debug!("parsing a collection at ({})", begin);
@@ -323,7 +402,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                         // are trailing commas allowed?
                         if commad && if is_prop { !map.is_empty() } else { !sub_nodes.is_empty() } {
                             error!("unexpected trailing comma at ({})", begin);
-                            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
+                            return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
                         }
 
                         if is_prop {
@@ -342,7 +421,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                             is_prop = true;
                         } else if !is_prop {
                             error!("found an illegal colon at ({})", begin);
-                            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
+                            return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
                         }
                     },
 
@@ -351,14 +430,14 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
 
                         if !commad {
                             error!("expected a comma at ({})", begin);
-                            return Err(TokensParseError::ExpectedToken { character: ',' });
+                            return Err(ExpressionParseError::ExpectedToken { character: ',' });
                         }
                         commad = false;
 
                         if !is_prop {
                             if !sub_nodes.is_empty() {
                                 error!("found a property key while parsing a linear list at ({})", begin);
-                                return Err(TokensParseError::ObscureCollectionType);
+                                return Err(ExpressionParseError::ObscureCollectionType);
                             }
 
                             debug!("collection is a property list at ({})", begin);
@@ -368,13 +447,13 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                         let colon_pos = begin + 1;
                         let value_pos = colon_pos + 1;
 
-                        if value_pos >= length { return Err(TokensParseError::UnexpectedEnd); }
+                        if value_pos >= length { return Err(ExpressionParseError::UnexpectedEnd); }
 
                         match &tokens[colon_pos] {
                             Token::Colon => (),
                             _ => {
                                 error!("property key wasn't followed by a colon at ({})", begin);
-                                return Err(TokensParseError::ExpectedToken { character: ':' });
+                                return Err(ExpressionParseError::ExpectedToken { character: ':' });
                             }
                         }
 
@@ -384,12 +463,12 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                             Token::CloseBracket | Token::CloseParenthesis | Token::Colon |
                             Token::Comma | Token::Symbol(_) => {
                                 error!("illegal token for a property value at ({})", begin);
-                                return Err(TokensParseError::UnexpectedToken { character: "".into() });
+                                return Err(ExpressionParseError::UnexpectedToken { character: "".into() });
                             },
 
                             _ => {
                                 debug!("parsing a property value sub-expression at ({})", value_pos);
-                                let (node, reached) = parse_tokens_helper(&tokens, value_pos, 0)?;
+                                let (node, reached) = parse_expression(&tokens, value_pos, 0, equals)?;
 
                                 map.insert(Rc::clone(key), node);
                                 begin = reached;
@@ -402,7 +481,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                     Token::Comma => {
                         if commad {
                             error!("double comma at ({})", begin);
-                            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
+                            return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
                         }
                         commad = true;
                     },
@@ -410,18 +489,18 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                     t => {
                         if !commad {
                             error!("expected a comma but instead got ({:?}) at ({})", t, begin);
-                            return Err(TokensParseError::ExpectedToken { character: ',' });
+                            return Err(ExpressionParseError::ExpectedToken { character: ',' });
                         }
 
                         commad = false;
 
                         if is_prop {
                             error!("found a linear list item while parsing a property list at ({})", begin);
-                            return Err(TokensParseError::ObscureCollectionType);
+                            return Err(ExpressionParseError::ObscureCollectionType);
                         }
 
                         debug!("parsing a linear list sub-expression at ({})", begin);
-                        let (node, reached) = parse_tokens_helper(&tokens, begin, 0)?;
+                        let (node, reached) = parse_expression(&tokens, begin, 0, equals)?;
 
                         sub_nodes.push(node);
                         begin = reached;
@@ -434,22 +513,23 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
 
             if parse_res.is_err() {
                 error!("expected the collection to end but it didn't");
-                return Err(TokensParseError::ImbalancedCollection);
+                return Err(ExpressionParseError::ImbalancedCollection);
             }
         },
 
         Token::Operator(op) => {
             let uop = UnaryOperator::try_from(op)
-                .map_err(|_| TokensParseError::UnexpectedToken { character: format!("{:?}", op) })?;
+                .map_err(|_| ExpressionParseError::UnexpectedToken { character: format!("{:?}", op) })?;
 
             if begin + 1 >= length {
-                return Err(TokensParseError::UnexpectedEnd);
+                return Err(ExpressionParseError::UnexpectedEnd);
             }
 
-            let (parsed, reached) = parse_tokens_helper(
+            let (parsed, reached) = parse_expression(
                 tokens,
                 begin + 1,
-                5
+                5, 
+                equals
             )?;
 
             parse_res = Ok(
@@ -475,26 +555,36 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
             debug!("parsing a float at ({})", begin);
             parse_res = Ok((Expression::Float(*float), begin))
         },
+        Token::Path(p) => {
+            debug!("parsing a path at ({})", begin);
+            parse_res = Ok(
+                (
+                    Expression::Path(Rc::clone(p)),
+                    begin
+                )
+            );
+        }
 
         Token::OpenParenthesis => {
             // (<expression>)
 
             if begin + 1 >= length {
                 error!("expected an expression or ')' at ({})", begin + 1);
-                return Err(TokensParseError::UnexpectedEnd);
+                return Err(ExpressionParseError::UnexpectedEnd);
             }
 
             debug!("parsing parenthesis sub-expression at ({})", begin + 1);
 
-            let (parsed_expr, reached) = parse_tokens_helper(
+            let (parsed_expr, reached) = parse_expression(
                 &tokens,
                 begin + 1,
-                0
+                0, 
+                equals
             )?;
 
             if reached + 1 >= length {
                 error!("expected ')' at ({})", reached + 1);
-                return Err(TokensParseError::UnexpectedEnd);
+                return Err(ExpressionParseError::UnexpectedEnd);
             }
 
             match &tokens[reached + 1] {
@@ -505,7 +595,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
 
                 t => {
                     error!("unexpected token ({:?}) at ({})", t, reached + 1);
-                    return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", t)});
+                    return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", t)});
                 }
             }
         },
@@ -513,20 +603,31 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
 
         Token::Comma => {
             error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
+            return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
         },
         Token::Colon => {
             error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::Colon) });
+            return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::Colon) });
         },
         Token::CloseBracket => {
             error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::CloseBracket) });
+            return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::CloseBracket) });
         },
         Token::CloseParenthesis => {
             error!("unexpected token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", Token::CloseParenthesis) });
+            return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::CloseParenthesis) });
         },
+
+        Token::NewLine => {
+            error!("unexpected new line at ({})", begin);
+            return Err(ExpressionParseError::UnexpectedToken { character: format!("\"\"") });
+        },
+
+        Token::BackSlash => {
+            error!("unexpected new line at ({})", begin);
+            return Err(ExpressionParseError::UnexpectedToken { character: format!("\\") });
+        },
+
         Token::Symbol(m) => {
             debug!("parsing symbol at ({})", begin);
             parse_res = Ok(
@@ -538,7 +639,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
         },
         Token::Range => {
             error!("unexpected range token at ({})", begin);
-            return Err(TokensParseError::UnexpectedToken { character: "..".into() });
+            return Err(ExpressionParseError::UnexpectedToken { character: "..".into() });
         },
 
         Token::Identifier(i) => {
@@ -547,7 +648,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
         }
 
         Token::Keyword(k) => {
-            return Err(TokensParseError::UnexpectedToken { character: format!("{:?}", k) });
+            return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", k) });
         }
     }
 
@@ -572,7 +673,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                         Token::CloseParenthesis => {
                             if commad {
                                 debug!("unexpected trailing comma at ({})", next);
-                                return Err(TokensParseError:: UnexpectedToken { character: ",".into() });
+                                return Err(ExpressionParseError:: UnexpectedToken { character: ",".into() });
                             }
 
                             let new_subtree = Expression::PostOperation {
@@ -589,7 +690,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                         Token::Comma => {
                             if commad {
                                 debug!("unexpected comma at ({})", next);
-                                return Err(TokensParseError::UnexpectedToken { character: ",".into() });
+                                return Err(ExpressionParseError::UnexpectedToken { character: ",".into() });
                             }
 
                             commad = true;
@@ -599,15 +700,16 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                         _ => {
                             if !commad {
                                 debug!("expected a comma at ({})", next);
-                                return Err(TokensParseError::ExpectedToken { character: ',' });
+                                return Err(ExpressionParseError::ExpectedToken { character: ',' });
                             }
 
                             debug!("parsing function argument #{} at ({})", args.len() + 1, next);
 
-                            let (parsed, reached) = parse_tokens_helper(
+                            let (parsed, reached) = parse_expression(
                                 tokens,
                                 next,
-                                0
+                                0, 
+                                equals
                             )?;
 
                             next = reached + 1;
@@ -621,13 +723,14 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
             // indexing and slicing
             Token::OpenBracket => {
                 if begin + 2 >= length {
-                    return Err(TokensParseError::UnexpectedEnd);
+                    return Err(ExpressionParseError::UnexpectedEnd);
                 }
 
-                let (parsed_in, reached) = parse_tokens_helper(
+                let (parsed_in, reached) = parse_expression(
                     tokens,
                     begin + 2,
-                    0
+                    0, 
+                    equals
                 )?;
 
                 match &tokens[reached + 1] {
@@ -635,13 +738,14 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                         debug!("parsing a range at ({})", reached + 1);
 
                         if reached + 2 >= length {
-                            return Err(TokensParseError::UnexpectedEnd);
+                            return Err(ExpressionParseError::UnexpectedEnd);
                         }
 
-                        let (parsed_end, end_reached) = parse_tokens_helper(
+                        let (parsed_end, end_reached) = parse_expression(
                             tokens,
                             reached + 2,
-                            0
+                            0, 
+                            equals
                         )?;
 
                         match &tokens[end_reached + 1] {
@@ -660,7 +764,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                             },
 
                             t => {
-                                return Err(TokensParseError::UnexpectedToken {
+                                return Err(ExpressionParseError::UnexpectedToken {
                                     character: format!("{:?}", t)
                                 })
                             }
@@ -679,7 +783,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                     },
 
                     t => {
-                        return Err(TokensParseError::UnexpectedToken {
+                        return Err(ExpressionParseError::UnexpectedToken {
                             character: format!("{:?}", t)
                         });
                     }
@@ -708,7 +812,7 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
 
                             t => {
                                 return Err(
-                                    TokensParseError::UnexpectedToken {
+                                    ExpressionParseError::UnexpectedToken {
                                         character: format!("{:?}", &t)
                                     }
                                 );
@@ -723,9 +827,26 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
                 let precedence = op_precedence(op);
 
                 let bop = BinaryOperator::try_from(op)
-                    .map_err(|_| TokensParseError::UnexpectedToken {
+                    .map_err(|_| ExpressionParseError::UnexpectedToken {
                         character: format!("{:?}", op.clone())
                     })?;
+
+                match op {
+                    Operator::AssignmentOrEquality => {
+                        if equals {
+                            return Ok(
+                                (
+                                    subtree,
+                                    begin
+                                )
+                            )
+                        }
+                    },
+
+                    _ => {
+
+                    }
+                }
 
                 if precedence < min_precedence {
                     break 'op_loop;
@@ -733,10 +854,11 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
 
                 debug!("parsing the right side of the operator at ({})", begin + 2);
 
-                let (right, right_reached) = parse_tokens_helper(
+                let (right, right_reached) = parse_expression(
                     tokens,
                     begin + 2,
-                    precedence + 1
+                    precedence + 1, 
+                    equals
                 )?;
 
                 let new_subtree = Expression::BinaryOperation {
@@ -757,8 +879,457 @@ fn parse_tokens_helper(tokens: &[Token], cursor: usize, min_precedence: u8) -> R
     Ok((subtree, begin))
 }
 
-pub fn parse_tokens<T : AsRef<[Token]>>(tokens: T) -> Result<Expression, TokensParseError> {
-    match parse_tokens_helper(tokens.as_ref(), 0, 0) {
+
+pub fn parse_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, usize), StatementParseError> {
+    debug!("parsing a statement at ({})", cursor);
+    
+    if cursor >= tokens.len() {
+        error!("unexpected end of tokens");
+        return Err(StatementParseError::UnexpectedEnd);
+    }
+    
+    match &tokens[cursor] {
+        Token::Keyword(k) => match k {
+            Keyword::If => {
+                let (parsed_if, reached) = parse_condition(tokens, cursor)?;
+
+                return Ok(
+                    (
+                        Statement::Condition(parsed_if),
+                        reached
+                    )
+                )
+            },
+
+            wk => {
+                error!("unexpected keyword at ({})", cursor);
+                return Err(StatementParseError::UnexpectedToken(format!("{:?}", wk)));
+            }
+        },
+
+        wt => {
+            error!("unexpected token at ({})", cursor);
+            return Err(StatementParseError::UnexpectedToken(format!("{:?}", wt)));
+        }
+    }
+}
+
+fn parse_assignment(tokens: &[Token], cursor: usize) -> Result<(Statement, usize), AssignmentParseError> {
+    debug!("parsing assignment at ({})", cursor);
+    
+    if cursor >= tokens.len() {
+        error!("unexpected end of tokens at ({})", cursor);
+        return Err(AssignmentParseError::UnexpectedEnd);
+    }
+
+    let (expr_parsed, reached) = parse_expression(tokens, cursor, 0, false)?;
+
+    let mut next = reached + 1;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected ':' or '='", next);
+        return Err(AssignmentParseError::UnexpectedEnd);
+    }
+
+    match &tokens[next] {
+        Token::Colon => {
+            next += 1;
+
+            if next >= tokens.len() {
+                error!("unexpected end of tokens at ({}). expected a type identifier", next);
+                trace!("<assignee>: >token<");
+                return Err(AssignmentParseError::UnexpectedEnd);
+            }
+
+            let (type_id, reached) = parse_expression(tokens, next, 0, false)?;
+
+            match type_id {
+                Expression::Identifier(id) => {
+                    next = reached + 1;
+
+                    if next >= tokens.len() {
+                        error!("unexpected end of tokens at ({}). expected '='", next);
+                        trace!("<assignee>: <type_id> >token<");
+                        return Err(AssignmentParseError::UnexpectedEnd);
+                    }
+
+                    match &tokens[next] {
+                        Token::Operator(op) => match op {
+                            Operator::AssignmentOrEquality => {
+                                next += 1;
+
+                                if next >= tokens.len() {
+                                    error!("unexpected end of tokens at ({}). expected an expression", next);
+                                    trace!("<assignee>: <type_id> = >token<");
+                                    return Err(AssignmentParseError::UnexpectedEnd);
+                                }
+
+                                let (parsed_expr, reached) = parse_expression(tokens, next, 0, true)?;
+
+                                next = reached + 1;
+
+                                if next >= tokens.len() {
+                                    error!("unexpected end of tokens at ({}). expected a new line", next);
+                                    trace!("<assignee>: <type_id> = <expression> >token<");
+                                    return Err(AssignmentParseError::UnexpectedEnd);
+                                }
+
+                                match &tokens[next] {
+                                    Token::NewLine => {
+                                        return Ok(
+                                            (
+                                                Statement::Assignment { 
+                                                    assignee: Box::new(expr_parsed), 
+                                                    specified_type: Some(id), 
+                                                    expression: Box::new(parsed_expr) 
+                                                },
+                                                next
+                                            )
+                                        )
+                                    },
+
+                                    wt => {
+                                        error!("unexpected token at ({}). expected a new line", next);
+                                        trace!("<assignee>: <type_id> = <expression> >token<");
+                                        return Err(AssignmentParseError::UnexpectedToken(format!("{:?}", wt)));
+                                    }
+                                }
+                            },
+
+                            wop => {
+                                error!("expected '=' but got ({:?}) at ({})", wop, next);
+                                trace!("<assignee>: <type_id> >token<");
+                                return Err(AssignmentParseError::InvalidOperator);
+                            }
+                        },
+
+                        _ => {
+                            error!("unexpected token at ({}). expected '='", next);
+                            trace!("<assignee>: <type_id> >token<");
+                            return Err(AssignmentParseError::InvalidOperator);
+                        }
+                    }
+                },
+
+                _ => {
+                    error!("invalid type identifier at ({})", next);
+                    trace!("<assignee>: >token<");
+                    return Err(AssignmentParseError::InvalidTypeIdentifier);
+                }
+            }
+        },
+
+        Token::Operator(op) => match op {
+            Operator::AssignmentOrEquality => {
+                next += 1;
+
+                if next >= tokens.len() {
+                    error!("unexpected end of tokens at ({}). expected an expression", next);
+                    trace!("<assignee> = >token<");
+                    return Err(AssignmentParseError::UnexpectedEnd);
+                }
+
+                let (parsed_expr, reached) = parse_expression(tokens, next, 0, true)?;
+
+                next = reached + 1;
+
+                if next >= tokens.len() {
+                    error!("unexpected end of tokens at ({}). expected a new line", next);
+                    trace!("<assignee> = .. >token<");
+                    return Err(AssignmentParseError::UnexpectedEnd);
+                }
+
+                match &tokens[next] {
+                    Token::NewLine => {
+                        return Ok(
+                            (
+                                Statement::Assignment { 
+                                    assignee: Box::new(expr_parsed),
+                                    specified_type: None,
+                                    expression: Box::new(parsed_expr) 
+                                },
+                                next
+                            )
+                        )
+                    },
+
+                    wt => {
+                        error!("unexpected token ({:?}) at ({}). expected a new line", wt, next);
+                        trace!("<assignee> = .. >token<");
+                        return Err(AssignmentParseError::UnexpectedToken(format!("{:?}", wt)));
+                    }
+                }
+            },
+
+            wop => {
+                error!("expected '=' but got ({:?}) at ({})", wop, next);
+                trace!("<assignee> >token<");
+                return Err(AssignmentParseError::InvalidOperator);
+            }
+        },
+
+        _ => {
+            error!("unexpected token at ({}). expected ':' or '='", next);
+            trace!("<assignee> >token<");
+            return Err(AssignmentParseError::InvalidOperator);
+        }
+    }
+}
+
+/*
+ *  if <expression> then
+ *      
+ *      <instructions> ..
+ * 
+ *  else if <expression> then 
+ *      
+ *      <instructions> ..
+ * 
+ *  else
+ *      
+ *      <instructions> ..
+ * 
+ *  end if
+*/
+fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock, usize), ConditionalBlockParseError> {
+    let mut begin = cursor;
+
+    let length = tokens.len();
+
+    debug!("parsing a conditional block at ({})", begin);
+
+    if begin >= length {
+        error!("unexpected token end. expected 'if' at ({})", begin);
+        return Err(ConditionalBlockParseError::UnexpectedEnd);
+    }
+
+    match &tokens[begin] {
+        Token::Keyword(k) => match k {
+            Keyword::If => { },
+
+            i => {
+                error!("conditional block did not begin with keyword 'if' at ({})", begin);
+                return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", i)));
+            }
+        },
+
+        t => {
+            error!("unexpected token ({:?}) at ({})", t, begin);
+            return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", t)));
+        }
+    };
+
+    begin += 1;
+
+    if begin >= length {
+        error!("unexpected token end. expected a conditional expression at ({})", begin);
+        return Err(ConditionalBlockParseError::UnexpectedEnd);
+    }
+
+    debug!("parsing a conditional expression at ({})", begin);
+
+    let (cond_expr, cond_reached) = parse_expression(tokens, begin, 0, true)?;
+
+    begin = cond_reached + 1;
+
+    if begin >= length {
+        error!("unexpected token end. expected 'then' at ({})", begin);
+        return Err(ConditionalBlockParseError::UnexpectedEnd);
+    }
+
+    match &tokens[begin] {
+        Token::Keyword(k) => match k {
+            Keyword::Then => {},
+            
+            i => {
+                error!("expected keyword 'then' at ({})", begin);
+                return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", i)));
+            }
+        },
+
+        t => {
+            error!("unexpected token ({:?}) at ({}). expected 'then'", t, begin);
+            return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", t)));
+        }
+    };
+
+    // instruction or newline
+
+    begin += 1;
+
+    if begin >= length {
+        error!("unexpected token end. expected an instruction or a new line at ({})", begin);
+        return Err(ConditionalBlockParseError::UnexpectedEnd);
+    }
+
+    match &tokens[begin] {
+        Token::NewLine => {
+            // parse instructions
+
+            return Err(ConditionalBlockParseError::UnexpectedEnd);
+        },
+
+        _ => {
+            // parse single instruction
+        
+            let (parsed_statement, expr_reached) = parse_statement(tokens, begin)
+                .map_err(|e| ConditionalBlockParseError::StatementParseError(format!("{e:#?}")))?;
+
+            begin = expr_reached + 1;
+
+            if begin >= length {
+                error!("unexpected token end. expected a new line at ({})", begin);
+                trace!("if .. then >token<");
+                return Err(ConditionalBlockParseError::UnexpectedEnd);
+            }
+
+            match &tokens[begin] {
+                Token::NewLine => {
+                    return Ok(
+                        (
+                            ConditionalBlock {
+                                condition: Box::new(cond_expr),
+                                block: Box::new([ parsed_statement ]),
+                                else_block: None
+                            },
+
+                            begin  
+                        )
+                    )
+                },
+                
+                Token::Keyword(k) => match k {
+                    Keyword::Else => {
+                        begin += 1;
+
+                        if begin >= length {
+                            error!("unexpected token end. expected an expression at ({})", begin);
+                            return Err(ConditionalBlockParseError::UnexpectedEnd);
+                        }
+
+                        match &tokens[begin] {
+                            Token::Keyword(k) => match k {
+                                Keyword::If => {
+                                    let (cond_parsed, reached) = parse_condition(tokens, begin)?;
+
+                                    return Ok(
+                                        (
+                                            ConditionalBlock {
+                                                condition: Box::new(cond_expr),
+                                                block: Box::new([ parsed_statement ]),
+                                                else_block: Some(ElseConditionalBlock::ElseIf(Box::new(cond_parsed)))
+                                            },
+                                            reached
+                                        )
+                                    );
+                                },
+
+                                wt => {
+                                    error!("unexpected token at ({})", begin);
+                                    trace!("if .. then .. else >token<");
+                                    return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", wt)));
+                                }
+                            },
+
+                            Token::NewLine => {
+                                return Err(ConditionalBlockParseError::UnexpectedEnd);
+                            }
+
+                            _ => {
+
+                                let (else_statement_parsed, expr_reached) = parse_statement(tokens, begin)
+                                    .map_err(|e| ConditionalBlockParseError::StatementParseError(format!("{e:#?}")))?;
+
+                                begin = expr_reached + 1;
+
+                                if begin >= length {
+                                    error!("unexpected end of tokens at ({}). expected a new line", begin);
+                                    trace!("if .. then .. else >token<");
+                                    return Err(ConditionalBlockParseError::UnexpectedEnd);
+                                }
+
+                                match &tokens[begin] {
+                                    Token::NewLine => {
+                                        return Ok(
+                                            (
+                                                ConditionalBlock {
+                                                    condition: Box::new(cond_expr),
+                                                    block: Box::new([ parsed_statement ]),
+                                                    else_block: Some(ElseConditionalBlock::Else(Box::new([ else_statement_parsed ])))
+                                                },
+
+                                                begin
+                                            )
+                                        );
+                                    },
+
+                                    wt => {
+                                        error!("unexpected token at ({}). expected a new line", begin);
+                                        trace!("if .. then .. else .. >token<");
+                                        return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", wt)));
+                                    }
+                                }
+                            }
+                        }
+                    },
+
+                    Keyword::End => {
+                        begin += 1;
+
+                        if begin >= length {
+                            error!("unexpected token end at ({})", begin);
+                            return Err(ConditionalBlockParseError::UnexpectedEnd);
+                        }
+
+                        match &tokens[begin] {
+                            Token::Keyword(kk) => match kk {
+                                Keyword::If => {
+                                    return Ok(
+                                        (
+                                            ConditionalBlock {
+                                                condition: Box::new(cond_expr),
+                                                block: Box::new([ parsed_statement ]),
+                                                else_block: None
+                                            },
+
+                                            begin
+                                        )
+                                    )
+                                },
+
+                                wk => {
+                                    error!("unexpected keyword after 'end' at ({})", begin);
+                                    trace!("if .. then .. end >token<");
+                                    return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", wk)));
+                                }
+                            },
+
+                            t => {
+                                error!("unexpected token after 'end' at ({})", begin);
+                                return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", t))); 
+                            }
+                        }
+                    },
+
+                    wk => {
+                        error!("unexpected keyword at ({})", begin);
+                        trace!("if .. then .. >token<");
+                        return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", wk)));
+                    }
+                },
+
+                t => {
+                    error!("unexpected token at ({})", begin);
+                    trace!("if .. then .. >token<");
+                    return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", t)));
+                }
+            }
+        }
+    }
+}
+
+pub fn parse_tokens<T : AsRef<[Token]>>(tokens: T) -> Result<Expression, ExpressionParseError> {
+    match parse_expression(tokens.as_ref(), 0, 0, true) {
         Ok((node, _)) => Ok(node),
         Err(e) => Err(e)
     }

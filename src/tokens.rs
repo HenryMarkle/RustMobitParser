@@ -30,9 +30,40 @@ pub enum Operator {
 #[derive(Debug)]
 pub enum Keyword {
     Global,
-    Switch,
-    Function,
-    Void
+    Property,
+    Case,
+    Otherwise,
+    Repeat,
+    While,
+    With,
+    Within,
+    Word,
+    Down,
+    In,
+    Of,
+    On,
+    Void,
+    If,
+    Then,
+    Else,
+    End,
+    Exit,
+    Item,
+    To,
+    Before,
+    After,
+    Into,
+    Put,
+    Loop,
+    Menu,
+    Next,
+    Return,
+    Set,
+    Sprite,
+    Intersects,
+
+    INF,
+    NAN
 }
 
 #[derive(Debug)]
@@ -46,6 +77,9 @@ pub enum Token {
     Comma,
     Colon,
     Range,
+
+    BackSlash,
+    NewLine,
     
     Operator(Operator),
 
@@ -53,6 +87,7 @@ pub enum Token {
     Integer(i32),
     Float(f32),
     Symbol(Rc<str>),
+    Path(Rc<[Box<str>]>),
 
     Identifier(Rc<str>),
     Keyword(Keyword)
@@ -98,8 +133,22 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
 
     'main_loop: while let Some(current) = chars.next() {
         match current {
-            ' ' => {
+            ' ' | '\t' => {
                 continue;
+            },
+
+            '\n' | '\r' => {
+                if current == '\r' {
+                    if let Some(next) = chars.peek() {
+                        if *next == '\n' {
+                            chars.next();
+                        }
+                    }
+                }
+
+                chars.next();
+
+                tokens.push(Token::NewLine);
             }
 
             '[' => {
@@ -182,32 +231,6 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                         tokens.push(Token::Range);
                         continue;
                     }
-                }
-
-                let mut buffer = String::with_capacity(2);
-                buffer.push('.');
-
-                while let Some(next) = chars.peek() {
-                    if next.is_digit(10) {
-                        buffer.push(*next);
-                        chars.next();
-                    }
-                    else {
-                        break;
-                    }
-                }
-
-                if buffer.len() > 1 {
-                    match buffer.parse::<f32>() {
-                        Ok(number) => {
-                            tokens.push(Token::Float(number));
-                        }
-                        Err(e) => {
-                            return Err(TokenizeError::FloatParse { err: e });
-                        }
-                    }
-
-                    continue;
                 }
 
                 tokens.push(Token::Operator(Operator::Dot));
@@ -387,8 +410,136 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                 }
 
                 match buffer.deref() {
+                    "global" => {
+                        tokens.push(Token::Keyword(Keyword::Void));
+                    },
+                    
+                    "property" => {
+                        tokens.push(Token::Keyword(Keyword::Void));
+                    },
+                    
                     "void" => {
                         tokens.push(Token::Keyword(Keyword::Void));
+                    },
+
+                    "if" => {
+                        tokens.push(Token::Keyword(Keyword::If));
+                    },
+
+                    "then" => {
+                        tokens.push(Token::Keyword(Keyword::Then));
+                    },
+
+                    "else" => {
+                        tokens.push(Token::Keyword(Keyword::Else));
+                    },
+
+                    "case" => {
+                        tokens.push(Token::Keyword(Keyword::Case));
+                    },
+                    
+                    "repeat" => {
+                        tokens.push(Token::Keyword(Keyword::Repeat));
+                    },
+                    
+                    "while" => {
+                        tokens.push(Token::Keyword(Keyword::While));
+                    },
+                    
+                    "with" => {
+                        tokens.push(Token::Keyword(Keyword::With));
+                    },
+
+                    "of" => {
+                        tokens.push(Token::Keyword(Keyword::Of));
+                    },
+
+                    "end" => {
+                        tokens.push(Token::Keyword(Keyword::End));
+                    },
+
+                    "exit" => {
+                        tokens.push(Token::Keyword(Keyword::Exit));
+                    },
+
+                    "loop" => {
+                        tokens.push(Token::Keyword(Keyword::Loop));
+                    },
+
+                    "item" => {
+                        tokens.push(Token::Keyword(Keyword::Item));
+                    },
+
+                    "to" => {
+                        tokens.push(Token::Keyword(Keyword::To));
+                    },
+                    
+                    "into" => {
+                        tokens.push(Token::Keyword(Keyword::Into));
+                    },
+
+                    "word" => {
+                        tokens.push(Token::Keyword(Keyword::Word));
+                    },
+
+                    "before" => {
+                        tokens.push(Token::Keyword(Keyword::Before));
+                    },
+
+                    "after" => {
+                        tokens.push(Token::Keyword(Keyword::After));
+                    },
+                    
+                    "within" => {
+                        tokens.push(Token::Keyword(Keyword::Within));
+                    },
+                    
+                    "in" => {
+                        tokens.push(Token::Keyword(Keyword::In));
+                    },
+
+                    "put" => {
+                        tokens.push(Token::Keyword(Keyword::Put));
+                    },
+                    
+                    "menu" => {
+                        tokens.push(Token::Keyword(Keyword::Menu));
+                    },
+                    
+                    "next" => {
+                        tokens.push(Token::Keyword(Keyword::Next));
+                    },
+                    
+                    "sprite" => {
+                        tokens.push(Token::Keyword(Keyword::Next));
+                    },
+                    
+                    "intersects" => {
+                        tokens.push(Token::Keyword(Keyword::Next));
+                    },
+                    
+                    "down" => {
+                        tokens.push(Token::Keyword(Keyword::Down));
+                    },
+                    
+                    "otherwise" => {
+                        tokens.push(Token::Keyword(Keyword::Otherwise));
+                    },
+
+                    "return" => {
+                        tokens.push(Token::Keyword(Keyword::Return));
+                    },
+                    
+                    "set" => {
+                        tokens.push(Token::Keyword(Keyword::Set));
+                    },
+
+                    "INT" => {
+                        tokens.push(Token::Keyword(Keyword::INF));
+                    },
+                    
+                    "NAN" => {
+                        tokens.push(Token::Keyword(Keyword::INF));
                     },
 
                     "contains" => {
