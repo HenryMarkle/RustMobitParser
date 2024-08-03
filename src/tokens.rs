@@ -61,6 +61,9 @@ pub enum Keyword {
     Set,
     Sprite,
     Intersects,
+    Char,
+    Line,
+    The,
 
     INF,
     NAN
@@ -78,7 +81,6 @@ pub enum Token {
     Colon,
     Range,
 
-    BackSlash,
     NewLine,
     
     Operator(Operator),
@@ -136,6 +138,23 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
             ' ' | '\t' => {
                 continue;
             },
+            
+
+            '\\' => {
+                if let Some(next) = chars.peek() {
+                    if *next == '\n' {
+                        chars.next();
+                    } else if *next == '\r' {
+                        chars.next();
+
+                        if let Some(next) = chars.peek() {
+                            if *next == '\n' {
+                                chars.next();
+                            }
+                        }
+                    }
+                }
+            }
 
             '\n' | '\r' => {
                 if current == '\r' {
@@ -466,6 +485,10 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                         tokens.push(Token::Keyword(Keyword::Loop));
                     },
 
+                    "char" => {
+                        tokens.push(Token::Keyword(Keyword::Char));
+                    },
+
                     "item" => {
                         tokens.push(Token::Keyword(Keyword::Item));
                     },
@@ -488,6 +511,10 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
 
                     "after" => {
                         tokens.push(Token::Keyword(Keyword::After));
+                    },
+                    
+                    "the" => {
+                        tokens.push(Token::Keyword(Keyword::The));
                     },
                     
                     "within" => {
@@ -532,6 +559,10 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                     
                     "set" => {
                         tokens.push(Token::Keyword(Keyword::Set));
+                    },
+                    
+                    "line" => {
+                        tokens.push(Token::Keyword(Keyword::Line));
                     },
 
                     "INT" => {
