@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     rc::Rc
 };
-use std::fmt::{Display, Formatter};
+use std::fmt::{format, Display, Formatter};
 use crate::tokens::{self, Operator, Token, Keyword};
 use thiserror;
 use log::{debug, error, trace};
@@ -113,10 +113,10 @@ pub enum ElseConditionalBlock {
 
 #[derive(Debug)]
 pub struct ConditionalBlock {
-    condition: Box<Expression>,
+    condition: Expression,
 
     block: Box<[Statement]>,
-    else_block: Option<ElseConditionalBlock>
+    else_block: Option<Box<[Statement]>>
 }
 
 #[derive(Debug)]
@@ -462,6 +462,18 @@ pub enum StatementParseError {
 
     #[error("failed to parse expression")]
     Expression(#[from] ExpressionParseError)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum StatementBlockParseError {
+    #[error("unexpected end")]
+    UnexpectedEnd,
+
+    #[error("expected a new line")]
+    ExpectedNewLine,
+
+    #[error("failed to parse statement")]
+    Statement(#[from] StatementParseError)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1310,6 +1322,11 @@ pub fn parse_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, us
             }
         },
 
+        Token::NewLine => {
+            error!("unexpected leading new line at ({cursor})");
+            return Err(StatementParseError::UnexpectedToken("<new line>".into()));
+        }
+
         _ => {
             // attempt to parse an assignment
 
@@ -1351,28 +1368,21 @@ pub fn parse_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, us
     }
 }
 
-fn parse_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statement]>, usize), StatementParseError> {
+fn parse_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statement]>, usize), StatementBlockParseError> {
     debug!("parsing a statement block");
     
     if cursor >= tokens.len() {
         error!("unexpected end of tokens");
-        return Err(StatementParseError::UnexpectedEnd);
+        return Err(StatementBlockParseError::UnexpectedEnd);
     }
 
     let mut next = cursor;
     let mut statements = vec![];
 
-    'statement_loop: while next < tokens.len() {
-        match &tokens[next] {
-            Token::Keyword(k) => match k {
-                Keyword::End => {
-                    break 'statement_loop;
-                },
-
-                _ => {}
-            },
-
-            _ => {}
+    'statement_loop: loop {
+        if next >= tokens.len() {
+            error!("unexpected end of tokens at ({}). expected a statement or 'end'", next);
+            return Err(StatementBlockParseError::UnexpectedEnd);
         }
 
         debug!("parsing statement #{} at ({})", statements.len(), next);
@@ -1382,6 +1392,22 @@ fn parse_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statem
         statements.push(statement);
         
         next = reached + 1;
+
+        if tokens[next] != Token::NewLine {
+            error!("expected a new line at ({})", next);
+            return Err(StatementBlockParseError::ExpectedNewLine);
+        }
+
+        let peek_next = next + 1;
+
+        if peek_next >= tokens.len() {
+            error!("unexpected end of tokens at ({}). expected a statement or 'end'", peek_next);
+            return Err(StatementBlockParseError::UnexpectedEnd);
+        }
+
+        if tokens[peek_next] == Token::Keyword(Keyword::End) {
+            break 'statement_loop;
+        }
     }
 
     Ok(
@@ -1991,21 +2017,74 @@ fn parse_switch_statement(tokens: &[Token], cursor: usize) -> Result<(SwitchStat
     }
 }
 
-/*
- *  if <expression> then
- *      
- *      <instructions> ..
- * 
- *  else if <expression> then 
- *      
- *      <instructions> ..
- * 
- *  else
- *      
- *      <instructions> ..
- * 
- *  end if
-*/
+fn parse_conditional_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statement]>, usize), StatementParseError> {
+    debug!("parsing a statement block");
+    
+    if cursor >= tokens.len() {
+        error!("unexpected end of tokens");
+        return Err(StatementParseError::UnexpectedEnd);
+    }
+
+    let mut next = cursor;
+    let mut statements = vec![];
+
+    'statement_loop: loop {
+        if next >= tokens.len() {
+            error!("unexpected end of tokens");
+            return Err(StatementParseError::UnexpectedEnd);
+        }
+
+        match &tokens[next] {
+            Token::NewLine => { continue; },
+
+            Token::Keyword(k) => match k {
+                Keyword::End => {
+                    let peek_next = next + 1;
+
+                    if peek_next >= tokens.len() {
+                        error!("unexpected end of tokens at ({})", peek_next);
+                        return Err(StatementParseError::UnexpectedEnd);
+                    }
+
+                    if tokens[peek_next] != Token::Keyword(Keyword::If) {
+                        error!("unexpected keyword at ({}). expected 'if'", peek_next);
+                        return Err(StatementParseError::UnexpectedToken(format!("{:?}", &tokens[peek_next])));
+                    }
+
+                    next -= 1;
+
+                    break 'statement_loop;
+                },
+
+                Keyword::Else => {
+                    next -= 1;
+                    break 'statement_loop;
+                }
+
+                _ => {}
+            },
+
+            _ => {}
+        }
+
+        debug!("parsing statement #{} at ({})", statements.len(), next);
+
+        let (statement, reached) = parse_statement(tokens, next)?;
+
+        statements.push(statement);
+        
+        next = reached + 1;
+    }
+
+    Ok(
+        (
+            statements.into(),
+            next
+        )
+    )
+}
+
+
 fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock, usize), ConditionalBlockParseError> {
     let mut begin = cursor;
 
@@ -2018,21 +2097,10 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
         return Err(ConditionalBlockParseError::UnexpectedEnd);
     }
 
-    match &tokens[begin] {
-        Token::Keyword(k) => match k {
-            Keyword::If => { },
-
-            i => {
-                error!("conditional block did not begin with keyword 'if' at ({})", begin);
-                return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", i)));
-            }
-        },
-
-        t => {
-            error!("unexpected token ({:?}) at ({})", t, begin);
-            return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", t)));
-        }
-    };
+    if tokens[begin] != Token::Keyword(Keyword::If) {
+        error!("unexpected token ({:?}) at ({})", &tokens[begin], begin);
+        return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", &tokens[begin])));
+    }
 
     begin += 1;
 
@@ -2043,7 +2111,7 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
 
     debug!("parsing a conditional expression at ({})", begin);
 
-    let (cond_expr, cond_reached) = parse_expression(tokens, begin, 0, true)?;
+    let (cond_expr, cond_reached) = parse_expression(tokens, begin, 0, false)?;
 
     begin = cond_reached + 1;
 
@@ -2052,23 +2120,12 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
         return Err(ConditionalBlockParseError::UnexpectedEnd);
     }
 
-    match &tokens[begin] {
-        Token::Keyword(k) => match k {
-            Keyword::Then => {},
-            
-            i => {
-                error!("expected keyword 'then' at ({})", begin);
-                return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", i)));
-            }
-        },
+    if tokens[begin] != Token::Keyword(Keyword::Then) {
+        error!("unexpected token ({:?}) at ({}). expected 'then'", &tokens[begin], begin);
+        return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", &tokens[begin])));
+    }
 
-        t => {
-            error!("unexpected token ({:?}) at ({}). expected 'then'", t, begin);
-            return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", t)));
-        }
-    };
-
-    // instruction or newline
+    // statements begin
 
     begin += 1;
 
@@ -2077,170 +2134,179 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
         return Err(ConditionalBlockParseError::UnexpectedEnd);
     }
 
-    match &tokens[begin] {
-        Token::NewLine => {
-            // parse instructions
+    if tokens[begin] == Token::NewLine {
+        // block
 
+        begin += 1;
+
+        if begin >= length {
+            error!("unexpected token end at ({}). expected a statement", begin);
             return Err(ConditionalBlockParseError::UnexpectedEnd);
-        },
+        }
 
-        _ => {
-            // parse single instruction
+        let (if_block, reached) = parse_statement_block(tokens, begin)
+            .map_err(|e| ConditionalBlockParseError::StatementParseError(e.to_string()))?;
 
-            let (parsed_statement, expr_reached) = parse_statement(tokens, begin)
-                .map_err(|e| ConditionalBlockParseError::StatementParseError(format!("{e:#?}")))?;
+        begin = reached + 1;
 
-            // parse_statement already checks for trailing new line
-            begin = expr_reached;
+        if begin >= length {
+            error!("unexpected token end at ({}). expected 'end' or 'else'", begin);
+            return Err(ConditionalBlockParseError::UnexpectedEnd);
+        }
 
-            if begin >= length {
-                error!("unexpected token end. expected an expression at ({})", begin);
-                trace!("if .. then .. >token<");
+        if tokens[begin] == Token::Keyword(Keyword::Else) {
+            let peek_next = begin + 1;
+
+            if peek_next >= length {
+                error!("unexpected token end at ({}). expected 'if' or a new line", peek_next);
                 return Err(ConditionalBlockParseError::UnexpectedEnd);
             }
 
-            match &tokens[begin] {
-                Token::NewLine => {
-                    return Ok(
-                        (
-                            ConditionalBlock {
-                                condition: Box::new(cond_expr),
-                                block: Box::new([ parsed_statement ]),
-                                else_block: None
-                            },
+            if tokens[peek_next] == Token::NewLine {
+                let peek_next = peek_next + 1;
 
-                            begin  
-                        )
-                    )
-                },
-                
-                Token::Keyword(k) => match k {
-                    Keyword::Else => {
-                        begin += 1;
-
-                        if begin >= length {
-                            error!("unexpected token end. expected an expression at ({})", begin);
-                            return Err(ConditionalBlockParseError::UnexpectedEnd);
-                        }
-
-                        match &tokens[begin] {
-                            Token::Keyword(k) => match k {
-                                Keyword::If => {
-                                    let (cond_parsed, reached) = parse_condition(tokens, begin)?;
-
-                                    return Ok(
-                                        (
-                                            ConditionalBlock {
-                                                condition: Box::new(cond_expr),
-                                                block: Box::new([ parsed_statement ]),
-                                                else_block: Some(ElseConditionalBlock::ElseIf(Box::new(cond_parsed)))
-                                            },
-                                            reached
-                                        )
-                                    );
-                                },
-
-                                wt => {
-                                    error!("unexpected token at ({})", begin);
-                                    trace!("if .. then .. else >token<");
-                                    return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", wt)));
-                                }
-                            },
-
-                            Token::NewLine => {
-                                return Err(ConditionalBlockParseError::UnexpectedEnd);
-                            }
-
-                            _ => {
-
-                                let (else_statement_parsed, expr_reached) = parse_statement(tokens, begin)
-                                    .map_err(|e| ConditionalBlockParseError::StatementParseError(format!("{e:#?}")))?;
-
-                                begin = expr_reached + 1;
-
-                                if begin >= length {
-                                    error!("unexpected end of tokens at ({}). expected a new line", begin);
-                                    trace!("if .. then .. else >token<");
-                                    return Err(ConditionalBlockParseError::UnexpectedEnd);
-                                }
-
-                                match &tokens[begin] {
-                                    Token::NewLine => {
-                                        return Ok(
-                                            (
-                                                ConditionalBlock {
-                                                    condition: Box::new(cond_expr),
-                                                    block: Box::new([ parsed_statement ]),
-                                                    else_block: Some(ElseConditionalBlock::Else(Box::new([ else_statement_parsed ])))
-                                                },
-
-                                                begin
-                                            )
-                                        );
-                                    },
-
-                                    wt => {
-                                        error!("unexpected token at ({}). expected a new line", begin);
-                                        trace!("if .. then .. else .. >token<");
-                                        return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", wt)));
-                                    }
-                                }
-                            }
-                        }
-                    },
-
-                    Keyword::End => {
-                        begin += 1;
-
-                        if begin >= length {
-                            error!("unexpected token end at ({})", begin);
-                            return Err(ConditionalBlockParseError::UnexpectedEnd);
-                        }
-
-                        match &tokens[begin] {
-                            Token::Keyword(kk) => match kk {
-                                Keyword::If => {
-                                    return Ok(
-                                        (
-                                            ConditionalBlock {
-                                                condition: Box::new(cond_expr),
-                                                block: Box::new([ parsed_statement ]),
-                                                else_block: None
-                                            },
-
-                                            begin
-                                        )
-                                    )
-                                },
-
-                                wk => {
-                                    error!("unexpected keyword after 'end' at ({})", begin);
-                                    trace!("if .. then .. end >token<");
-                                    return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", wk)));
-                                }
-                            },
-
-                            t => {
-                                error!("unexpected token after 'end' at ({})", begin);
-                                return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", t))); 
-                            }
-                        }
-                    },
-
-                    wk => {
-                        error!("unexpected keyword at ({})", begin);
-                        trace!("if .. then .. >token<");
-                        return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", wk)));
-                    }
-                },
-
-                t => {
-                    error!("unexpected token at ({})", begin);
-                    trace!("if .. then .. >token<");
-                    return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", t)));
+                if peek_next >= length {
+                    error!("unexpected token end at ({}). expected 'end' or a statement", peek_next);
+                    return Err(ConditionalBlockParseError::UnexpectedEnd);
                 }
+
+                let (else_block, reached) = parse_statement_block(tokens, peek_next)
+                    .map_err(|e| ConditionalBlockParseError::StatementParseError(e.to_string()))?;
+
+                let mut next = reached + 1;
+
+                if next >= length {
+                    error!("unexpected token end at ({}). expected 'end'", next);
+                    return Err(ConditionalBlockParseError::UnexpectedEnd);
+                }
+
+                if tokens[next] != Token::Keyword(Keyword::End) {
+                    error!("unexpected token at ({}). expected 'end'", next);
+                    return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", &tokens[next])));
+                }
+
+                next += 1;
+
+                if tokens[next] != Token::Keyword(Keyword::If) {
+                    error!("unexpected token at ({}). expected 'if'", next);
+                    return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", &tokens[next])));
+                }
+
+                return Ok(
+                    (
+                        ConditionalBlock {
+                            condition: cond_expr,
+                            block: if_block,
+                            else_block: Some(else_block)
+                        },
+
+                        next
+                    )
+                );
             }
+        
+            if tokens[peek_next] != Token::Keyword(Keyword::If) {
+                error!("unexpected token at ({}). expected 'if'", peek_next);
+                return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", &tokens[peek_next])));
+            }
+
+            return parse_condition(tokens, peek_next);
         }
+
+        if tokens[begin] == Token::Keyword(Keyword::End) {
+            error!("expected a 'end' at ({})", begin);
+            return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", &tokens[begin])));
+        }
+        
+        begin += 1;
+
+        if begin >= length {
+            error!("unexpected token end at ({}). expected 'if'", begin);
+            return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", &tokens[begin])));
+        }
+
+        if tokens[begin] != Token::Keyword(Keyword::If) {
+            error!("expected 'if' at ({})", begin);
+            return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", &tokens[begin])));
+        }
+
+        return Ok(
+            (
+                ConditionalBlock {
+                    condition: cond_expr,
+                    block: if_block,
+                    else_block: None
+                },
+
+                begin
+            )
+        );
+    } else {
+        // same-line
+
+        let (if_block, reached) = parse_statement(tokens, begin)
+            .map_err(|e| ConditionalBlockParseError::StatementParseError(e.to_string()))?;
+
+
+        let peek_next = reached + 1;
+
+        if peek_next >= length {
+            error!("unexpected token end at ({}). expected 'else' or a new line", begin);
+            return Err(ConditionalBlockParseError::UnexpectedEnd);
+        }
+
+        if tokens[peek_next] == Token::Keyword(Keyword::Else) {
+            let next = peek_next + 1;
+
+            if next >= length {
+                error!("unexpected token end at ({}). expected a statement", next);
+                return Err(ConditionalBlockParseError::UnexpectedEnd);
+            }
+
+            let (else_block, reached) = parse_statement(tokens, next)
+                .map_err(|e| ConditionalBlockParseError::StatementParseError(format!("{:?}", e)))?;
+        
+            let peek_next = reached + 1;
+
+            if peek_next >= length {
+                error!("unexpected token end at ({}). expected a new line", begin);
+                return Err(ConditionalBlockParseError::UnexpectedEnd);
+            }
+
+            if tokens[peek_next] != Token::NewLine {
+                error!("expected a new line at ({})", peek_next);
+                return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", &tokens[peek_next])));
+            }
+
+            return Ok(
+                (
+                    ConditionalBlock {
+                        condition: cond_expr,
+                        block: Box::new([ if_block ]),
+                        else_block: Some(Box::new([ else_block ]))
+                    },
+
+                    reached
+                )
+            );
+        }
+    
+        if tokens[peek_next] == Token::NewLine {
+            error!("expected a new line at ({})", peek_next);
+            return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", &tokens[peek_next])));
+        }
+        
+        return Ok(
+            (
+                ConditionalBlock {
+                    condition: cond_expr,
+                    block: Box::new([ if_block ]),
+                    else_block: None
+                },
+
+                reached
+            )
+        );
     }
 }
 

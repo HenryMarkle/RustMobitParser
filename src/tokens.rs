@@ -28,6 +28,14 @@ pub enum Operator {
 }
 
 #[derive(Debug, PartialEq)]
+pub enum BlockEnd {
+    If,
+    Repeat,
+    Case,
+    Handler(Rc<str>),
+}
+
+#[derive(Debug, PartialEq)]
 pub enum Keyword {
     Global,
     Property,
