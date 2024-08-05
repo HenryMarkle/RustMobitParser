@@ -106,17 +106,20 @@ pub struct SwitchCase {
 }
 
 #[derive(Debug)]
-pub enum ElseConditionalBlock {
-    Else(Box<[Statement]>),
-    ElseIf(Box<ConditionalBlock>)
+pub enum ConditionalBlockType {
+    Binary {
+        if_block: Box<[Statement]>,
+        else_block: Box<[Statement]>
+    },
+
+    Unary(Box<[Statement]>)
 }
 
 #[derive(Debug)]
 pub struct ConditionalBlock {
-    condition: Expression,
+    pub condition: Expression,
 
-    block: Box<[Statement]>,
-    else_block: Option<Box<[Statement]>>
+    pub branches: ConditionalBlockType
 }
 
 #[derive(Debug)]
@@ -1156,7 +1159,6 @@ fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equals:
     Ok((subtree, begin))
 }
 
-
 pub fn parse_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, usize), StatementParseError> {
     debug!("parsing a statement at ({})", cursor);
     
@@ -1385,7 +1387,7 @@ fn parse_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statem
             return Err(StatementBlockParseError::UnexpectedEnd);
         }
 
-        debug!("parsing statement #{} at ({})", statements.len(), next);
+        debug!("parsing statement #{} at ({})", statements.len() + 1, next);
 
         let (statement, reached) = parse_statement(tokens, next)?;
 
@@ -1408,6 +1410,65 @@ fn parse_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statem
         if tokens[peek_next] == Token::Keyword(Keyword::End) {
             break 'statement_loop;
         }
+
+        next += 1;
+    }
+
+    Ok(
+        (
+            statements.into(),
+            next
+        )
+    )
+}
+
+fn parse_conditional_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statement]>, usize), StatementBlockParseError> {
+    debug!("parsing a statement block");
+    
+    if cursor >= tokens.len() {
+        error!("unexpected end of tokens");
+        return Err(StatementBlockParseError::UnexpectedEnd);
+    }
+
+    let mut next = cursor;
+    let mut statements = vec![];
+
+    'statement_loop: loop {
+        if next >= tokens.len() {
+            error!("unexpected end of tokens at ({}). expected a statement or 'end'", next);
+            return Err(StatementBlockParseError::UnexpectedEnd);
+        }
+
+        if tokens[next] == Token::Keyword(Keyword::End) || tokens[next] == Token::Keyword(Keyword::Else) {
+            next -= 1;
+            break 'statement_loop;
+        }
+
+        debug!("parsing statement #{} at ({})", statements.len() + 1, next);
+
+        let (statement, reached) = parse_statement(tokens, next)?;
+
+        statements.push(statement);
+        
+        next = reached + 1;
+
+        if tokens[next] != Token::NewLine {
+            error!("expected a new line at ({})", next);
+            return Err(StatementBlockParseError::ExpectedNewLine);
+        }
+
+        let peek_next = next + 1;
+
+        if peek_next >= tokens.len() {
+            error!("unexpected end of tokens at ({}). expected a statement or 'end'", peek_next);
+            return Err(StatementBlockParseError::UnexpectedEnd);
+        }
+
+        if tokens[peek_next] == Token::Keyword(Keyword::End) {
+            break 'statement_loop;
+        }
+
+        next += 1;
     }
 
     Ok(
@@ -2017,74 +2078,6 @@ fn parse_switch_statement(tokens: &[Token], cursor: usize) -> Result<(SwitchStat
     }
 }
 
-fn parse_conditional_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statement]>, usize), StatementParseError> {
-    debug!("parsing a statement block");
-    
-    if cursor >= tokens.len() {
-        error!("unexpected end of tokens");
-        return Err(StatementParseError::UnexpectedEnd);
-    }
-
-    let mut next = cursor;
-    let mut statements = vec![];
-
-    'statement_loop: loop {
-        if next >= tokens.len() {
-            error!("unexpected end of tokens");
-            return Err(StatementParseError::UnexpectedEnd);
-        }
-
-        match &tokens[next] {
-            Token::NewLine => { continue; },
-
-            Token::Keyword(k) => match k {
-                Keyword::End => {
-                    let peek_next = next + 1;
-
-                    if peek_next >= tokens.len() {
-                        error!("unexpected end of tokens at ({})", peek_next);
-                        return Err(StatementParseError::UnexpectedEnd);
-                    }
-
-                    if tokens[peek_next] != Token::Keyword(Keyword::If) {
-                        error!("unexpected keyword at ({}). expected 'if'", peek_next);
-                        return Err(StatementParseError::UnexpectedToken(format!("{:?}", &tokens[peek_next])));
-                    }
-
-                    next -= 1;
-
-                    break 'statement_loop;
-                },
-
-                Keyword::Else => {
-                    next -= 1;
-                    break 'statement_loop;
-                }
-
-                _ => {}
-            },
-
-            _ => {}
-        }
-
-        debug!("parsing statement #{} at ({})", statements.len(), next);
-
-        let (statement, reached) = parse_statement(tokens, next)?;
-
-        statements.push(statement);
-        
-        next = reached + 1;
-    }
-
-    Ok(
-        (
-            statements.into(),
-            next
-        )
-    )
-}
-
-
 fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock, usize), ConditionalBlockParseError> {
     let mut begin = cursor;
 
@@ -2111,7 +2104,7 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
 
     debug!("parsing a conditional expression at ({})", begin);
 
-    let (cond_expr, cond_reached) = parse_expression(tokens, begin, 0, false)?;
+    let (cond_expr, cond_reached) = parse_expression(tokens, begin, 0, true)?;
 
     begin = cond_reached + 1;
 
@@ -2144,7 +2137,7 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
             return Err(ConditionalBlockParseError::UnexpectedEnd);
         }
 
-        let (if_block, reached) = parse_statement_block(tokens, begin)
+        let (if_block, reached) = parse_conditional_statement_block(tokens, begin)
             .map_err(|e| ConditionalBlockParseError::StatementParseError(e.to_string()))?;
 
         begin = reached + 1;
@@ -2196,8 +2189,7 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
                     (
                         ConditionalBlock {
                             condition: cond_expr,
-                            block: if_block,
-                            else_block: Some(else_block)
+                            branches: ConditionalBlockType::Binary { if_block, else_block }
                         },
 
                         next
@@ -2213,8 +2205,8 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
             return parse_condition(tokens, peek_next);
         }
 
-        if tokens[begin] == Token::Keyword(Keyword::End) {
-            error!("expected a 'end' at ({})", begin);
+        if tokens[begin] != Token::Keyword(Keyword::End) {
+            error!("unexpected ({:?}) at ({}). expected 'end'", &tokens[begin], begin);
             return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", &tokens[begin])));
         }
         
@@ -2234,8 +2226,7 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
             (
                 ConditionalBlock {
                     condition: cond_expr,
-                    block: if_block,
-                    else_block: None
+                    branches: ConditionalBlockType::Unary(if_block)
                 },
 
                 begin
@@ -2282,8 +2273,10 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
                 (
                     ConditionalBlock {
                         condition: cond_expr,
-                        block: Box::new([ if_block ]),
-                        else_block: Some(Box::new([ else_block ]))
+                        branches: ConditionalBlockType::Binary { 
+                            if_block: Box::new([ if_block ]),
+                            else_block: Box::new([ else_block ]) 
+                        }
                     },
 
                     reached
@@ -2300,8 +2293,7 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
             (
                 ConditionalBlock {
                     condition: cond_expr,
-                    block: Box::new([ if_block ]),
-                    else_block: None
+                    branches: ConditionalBlockType::Unary(Box::new([ if_block ]))
                 },
 
                 reached
