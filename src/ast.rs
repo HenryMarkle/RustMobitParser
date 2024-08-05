@@ -1,3 +1,4 @@
+use std::num::Saturating;
 use std::{
     collections::HashMap,
     rc::Rc
@@ -100,7 +101,7 @@ pub enum Expression {
 
 #[derive(Debug)]
 pub struct SwitchCase {
-    pub case: Box<[Expression]>,
+    pub pattern: Expression,
     pub block: Box<[Statement]>
 }
 
@@ -141,6 +142,13 @@ pub enum ExitArgument {
 }
 
 #[derive(Debug)]
+pub struct SwitchStatement {
+    condition: Expression,
+    cases: Box<[SwitchCase]>,
+    otherwise: Option<Box<[Statement]>>
+}
+
+#[derive(Debug)]
 pub enum Statement {
     Assignment {
         assignee: Expression,
@@ -150,10 +158,7 @@ pub enum Statement {
 
     Condition(ConditionalBlock),
 
-    Switch {
-        condition: Expression,
-        cases: Box<[SwitchCase]>
-    },
+    Switch(SwitchStatement),
 
     Expression(Expression),
 
@@ -375,6 +380,45 @@ pub enum GlobalDeclarationsParseError {
 
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum CaseBlockParseError {
+    #[error("unexpected end")]
+    UnexpectedEnd,
+
+    #[error("unexpected token")]
+    UnexpectedToken,
+
+    #[error("failed to parse statement")]
+    Statement(#[from ]StatementParseError),
+
+    #[error("switch case block was empty")]
+    EmptyBlock
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SwitchParseError {
+    #[error("unexpected end")]
+    UnexpectedEnd,
+
+    #[error("unexpected token")]
+    UnexpectedToken,
+
+    #[error("failed to parse switch expression")]
+    SwitchExpression,
+
+    #[error("failed to parse a switch case statement block")]
+    CaseBlock(#[from] CaseBlockParseError),
+
+    #[error("otherwise case is already defined")]
+    DoubleOtherwise,
+
+    #[error("failed to parse case pattern")]
+    CasePattern,
+
+    #[error("invalid switch case pattern. must be a constant literal")]
+    InvalidCasePattern,
+}
+
 // #[derive(Debug, thiserror::Error)]
 // pub enum TheStatementParseError {
 
@@ -413,8 +457,11 @@ pub enum StatementParseError {
     #[error("failed to parse global declaration statement")]
     Global(#[from] GlobalDeclarationsParseError),
     
-    // #[error("failed to parse the statement")]
-    // The(#[from] TheStatementParseError)
+    #[error("failed to parse switch statement")]
+    Switch,
+
+    #[error("failed to parse expression")]
+    Expression(#[from] ExpressionParseError)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1246,17 +1293,103 @@ pub fn parse_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, us
                 }
             },
 
+            Keyword::Case => {
+                let (switch, reached) = parse_switch_statement(tokens, cursor).map_err(|_| StatementParseError::Switch)?;
+            
+                return Ok(
+                    (
+                        Statement::Switch(switch),
+                        reached
+                    )
+                );
+            },
+
             wk => {
                 error!("unexpected keyword at ({})", cursor);
                 return Err(StatementParseError::UnexpectedToken(format!("{:?}", wk)));
             }
         },
 
-        wt => {
-            error!("unexpected token at ({})", cursor);
-            return Err(StatementParseError::UnexpectedToken(format!("{:?}", wt)));
+        _ => {
+            // attempt to parse an assignment
+
+            debug!("attempting to parse an assignment at ({})", cursor);
+
+            match parse_assignment(tokens, cursor) {
+                Ok((assignment, reached)) => {
+                    return Ok(
+                        (
+                            assignment,
+                            reached
+                        )
+                    );
+                },
+
+                Err(_) => {
+                    // on failure, attempt to parse an expression
+
+                    debug!("assignment parse failure; attempting to parse an expression at ({})", cursor);
+
+                    match parse_expression(tokens, cursor, 0, true) {
+                        Ok((expr, reached)) => {
+                            return Ok(
+                                (
+                                    Statement::Expression(expr),
+                                    reached
+                                )
+                            );
+                        },
+
+                        Err(e) => {
+                            error!("failed to parse expression at ({})", cursor);
+                            return Err(StatementParseError::Expression(e));
+                        }
+                    }
+                }
+            }
         }
     }
+}
+
+fn parse_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statement]>, usize), StatementParseError> {
+    debug!("parsing a statement block");
+    
+    if cursor >= tokens.len() {
+        error!("unexpected end of tokens");
+        return Err(StatementParseError::UnexpectedEnd);
+    }
+
+    let mut next = cursor;
+    let mut statements = vec![];
+
+    'statement_loop: while next < tokens.len() {
+        match &tokens[next] {
+            Token::Keyword(k) => match k {
+                Keyword::End => {
+                    break 'statement_loop;
+                },
+
+                _ => {}
+            },
+
+            _ => {}
+        }
+
+        debug!("parsing statement #{} at ({})", statements.len(), next);
+
+        let (statement, reached) = parse_statement(tokens, next)?;
+
+        statements.push(statement);
+        
+        next = reached + 1;
+    }
+
+    Ok(
+        (
+            statements.into(),
+            next
+        )
+    )
 }
 
 fn parse_put_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, usize), PutStatementParseError> {
@@ -1534,6 +1667,326 @@ fn parse_assignment(tokens: &[Token], cursor: usize) -> Result<(Statement, usize
             error!("unexpected token at ({}). expected ':' or '='", next);
             trace!("<assignee> >token<");
             return Err(AssignmentParseError::InvalidOperator);
+        }
+    }
+}
+
+fn parse_switch_case_statements_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statement]>, usize), CaseBlockParseError> {
+    debug!("parsing a switch case statement block at ({})", cursor);
+
+    let mut next = cursor;
+    let mut statements = vec![];
+
+    loop {
+        let (statement, reached) = parse_statement(tokens, next)?;
+
+        match &statement {
+            Statement::Expression(e) => {
+                match e {
+                    Expression::Integer(_) |
+                    Expression::Float(_) |
+                    Expression::String(_) |
+                    Expression::Symbol(_) => {
+                        let peek_next = reached + 1;
+
+                        if peek_next >= tokens.len() {
+                            error!("unexpected end of tokens at ({})", peek_next);
+                            return Err(CaseBlockParseError::UnexpectedEnd);
+                        }
+            
+                        if tokens[peek_next] == Token::Colon {
+                            if statements.is_empty() {
+                                error!("empty switch case statement");
+                                return Err(CaseBlockParseError::EmptyBlock);
+                            }
+
+                            return Ok(
+                                (
+                                    statements.into(),
+                                    next
+                                )
+                            );
+                        }
+                    },
+
+                    _ => { }
+                }
+            },
+
+            _ => { }
+        }
+    
+        statements.push(statement);
+
+        next = reached;
+
+        if next + 1 >= tokens.len() {
+            error!("unexpected end of tokens at ({})", next + 1);
+            return Err(CaseBlockParseError::UnexpectedEnd);
+        }
+
+        if tokens[next + 1] == Token::Keyword(Keyword::End) {
+            let peek_next = next + 2;
+
+            if peek_next >= tokens.len() {
+                error!("unexpected end of tokens at ({}). expected 'case'", peek_next);
+                return Err(CaseBlockParseError::UnexpectedEnd);
+            }
+
+            if tokens[peek_next] == Token::Keyword(Keyword::Case) {
+                return Ok(
+                    (
+                        statements.into(),
+                        next
+                    )
+                );
+            }
+        }
+
+        next += 1;
+    }
+}
+
+fn parse_switch_statement(tokens: &[Token], cursor: usize) -> Result<(SwitchStatement, usize), SwitchParseError> {
+    debug!("parsing a switch statement at ({})", cursor);
+
+    if cursor >= tokens.len() {
+        error!("unexpected end of tokens at ({})", cursor);
+        return Err(SwitchParseError::UnexpectedEnd);
+    }
+
+    match &tokens[cursor] {
+        Token::Keyword(k) => match k {
+            Keyword::Case => { },
+            wk => {
+                error!("unexpected keyword ({:?}) at ({})", wk, cursor);
+                return Err(SwitchParseError::UnexpectedToken);
+            }
+        },
+
+        wt => {
+            error!("unexpected token ({:?}) at ({})", wt, cursor);
+            return Err(SwitchParseError::UnexpectedToken);
+        }
+    }
+
+    let mut next = cursor + 1;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected an expression", next);
+        trace!("case >token<");
+        return Err(SwitchParseError::UnexpectedEnd);
+    }
+
+    let (switch_expr, reached) = parse_expression(tokens, next, 0, true)
+        .map_err(|_| SwitchParseError::SwitchExpression)?;
+
+    next = reached + 1;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected 'of'", next);
+        trace!("case >token<");
+        return Err(SwitchParseError::UnexpectedEnd);
+    }
+
+    match &tokens[next] {
+        Token::Keyword(k) => match k {
+            Keyword::Of => { },
+
+            wk => {
+                error!("unexpected keyword ({:?}) at ({}). expected 'of'", wk, cursor);
+                trace!("case <expr> >token<");
+                return Err(SwitchParseError::UnexpectedToken);
+            }
+        },
+
+        wt => {
+            error!("unexpected token ({:?}) at ({}). expected 'of'", wt, cursor);
+            trace!("case <expr> >token<");
+            return Err(SwitchParseError::UnexpectedToken);
+        }
+    }
+
+    next += 1;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected a new line", next);
+        trace!("case <expr> of >token<");
+        return Err(SwitchParseError::UnexpectedEnd);
+    }
+
+    match &tokens[next] {
+        Token::NewLine => { },
+
+        wt => {
+            error!("unexpected token ({:?}) at ({}). expected a new line", wt, cursor);
+            trace!("case <expr> of >token<");
+            return Err(SwitchParseError::UnexpectedToken);
+        }
+    }
+
+    next += 1;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({})", next);
+        trace!("case <expr> of .. >token<");
+        return Err(SwitchParseError::UnexpectedEnd);
+    }
+
+    let mut cases = vec![];
+    let mut otherwise = None;
+
+    loop {
+        match &tokens[next] {
+            Token::Keyword(k) => match k {
+                Keyword::End => {
+                    next += 1;
+
+                    if next >= tokens.len() {
+                        error!("unexpected end of tokens at ({}). expected 'case'", next);
+                        trace!("case <expr> of .. end >token<");
+                        return Err(SwitchParseError::UnexpectedEnd);
+                    }
+
+                    match &tokens[next] {
+                        Token::Keyword(k) => match k {
+                            Keyword::Case => {
+                                return Ok(
+                                    (
+                                        SwitchStatement {
+                                            condition: switch_expr,
+                                            cases: cases.into(),
+                                            otherwise
+                                        },
+
+                                        next
+                                    )
+                                );
+                            },
+
+                            wk => {
+                                error!("unexpected keyword ({:?}) at ({}). expected 'case'", wk, next);
+                                trace!("case <expr> of .. end >token<");
+                                return Err(SwitchParseError::UnexpectedToken);
+                            }
+                        },
+
+                        wt => {
+                            error!("unexpected token ({:?}) at ({}). expected 'case'", wt, next);
+                            trace!("case <expr> of .. end >token<");
+                        }
+                    }
+                },
+
+                Keyword::Otherwise => {
+                    if otherwise.is_some() {
+                        error!("'otherwise' case has already been defined");
+                        return Err(SwitchParseError::DoubleOtherwise);
+                    }
+
+                    next += 1;
+
+                    if next >= tokens.len() {
+                        error!("unexpected end of tokens at ({}). expected ':'", next);
+                        trace!("case <expr> of\n\t..\n\totherwise >token<");
+                        return Err(SwitchParseError::UnexpectedEnd);
+                    }
+
+                    if tokens[next] != Token::Colon {
+                        error!("unexpected token at ({}). expected ':'", next);
+                        trace!("case <expr> of\n\t..\n\totherwise >token<");
+                        return Err(SwitchParseError::UnexpectedToken);
+                    }
+
+                    next += 1;
+
+                    if next >= tokens.len() {
+                        error!("unexpected token at ({}). expected a statement or a new line", next);
+                        trace!("case <expr> of\n\t..\n\totherwise: >token<");
+                        return Err(SwitchParseError::UnexpectedToken);
+                    }
+
+                    if tokens[next] == Token::NewLine {
+                        next += 1;
+
+                        if next >= tokens.len() {
+                            error!("unexpected token at ({}). expected a statement", next);
+                            trace!("case <expr> of\n\t..\n\totherwise: >token<");
+                            return Err(SwitchParseError::UnexpectedToken);
+                        }
+                    }
+
+                    let (block, reached) = parse_switch_case_statements_block(tokens, next)?;
+
+                    otherwise = Some(block);
+                    next = reached;
+                }
+            
+                wk => {
+                    error!("unexpected keyword ({:?}) at ({}). expected an expression", wk, next);
+                    return Err(SwitchParseError::UnexpectedToken);
+                }
+            },
+
+            _ => {
+                let (pattern, p_reached) = parse_expression(tokens, next, 0, false)
+                    .map_err(|_| SwitchParseError::CasePattern)?;
+
+                match &pattern {
+                    Expression::Integer(_) |
+                    Expression::Float(_) |
+                    Expression::String(_) |
+                    Expression::Symbol(_) => {
+
+                    },
+
+                    _ => {
+                        error!("invalid switch case pattern at ({})", next);
+                        return Err(SwitchParseError::InvalidCasePattern);
+                    }
+                }
+
+                next = p_reached + 1;
+
+                if next >= tokens.len() {
+                    error!("unexpected end of tokens at ({}). expected ':'", next);
+                    return Err(SwitchParseError::UnexpectedEnd);
+                }
+
+                if tokens[next] != Token::Colon {
+                    error!("unexpected token at ({}). expected ':'", next);
+                    return Err(SwitchParseError::UnexpectedToken);
+                }
+
+                next += 1;
+
+                if tokens[next] != Token::Colon {
+                    error!("unexpected token at ({}). expected a statement or a new line", next);
+                    return Err(SwitchParseError::UnexpectedToken);
+                }
+
+                if tokens[next] == Token::NewLine {
+                    next += 1;
+
+                    if tokens[next] != Token::Colon {
+                        error!("unexpected token at ({}). expected a statement", next);
+                        return Err(SwitchParseError::UnexpectedToken);
+                    }
+                }
+
+                let (block, reached) = parse_switch_case_statements_block(tokens, next)?;
+
+                cases.push(SwitchCase{ pattern, block });
+
+                next = reached;
+            }
+        }
+
+        next += 1;
+
+        if next >= tokens.len() {
+            error!("unexpected end of tokens at ({}). expected an expression or 'end'", next);
+            return Err(SwitchParseError::UnexpectedEnd);
         }
     }
 }

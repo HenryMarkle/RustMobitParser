@@ -4,7 +4,7 @@ use std::{
 };
 use thiserror;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
     Dot,                    // .
     Concatenation,          // &
@@ -27,7 +27,7 @@ pub enum Operator {
     Starts                  // starts
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Keyword {
     Global,
     Property,
@@ -69,7 +69,7 @@ pub enum Keyword {
     NAN
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Token {
     OpenBracket,
     CloseBracket,
