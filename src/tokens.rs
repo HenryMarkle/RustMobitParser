@@ -173,8 +173,6 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                     }
                 }
 
-                chars.next();
-
                 tokens.push(Token::NewLine);
             }
 

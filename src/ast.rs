@@ -101,25 +101,21 @@ pub enum Expression {
 
 #[derive(Debug)]
 pub struct SwitchCase {
-    pub pattern: Expression,
+    pub patterns: Box<[Expression]>,
     pub block: Box<[Statement]>
 }
 
 #[derive(Debug)]
-pub enum ConditionalBlockType {
-    Binary {
-        if_block: Box<[Statement]>,
-        else_block: Box<[Statement]>
-    },
-
-    Unary(Box<[Statement]>)
+pub enum ElseConditionalBlock {
+    ElseIf(Box<ConditionalBlock>),
+    Else(Box<[Statement]>),
 }
 
 #[derive(Debug)]
 pub struct ConditionalBlock {
     pub condition: Expression,
-
-    pub branches: ConditionalBlockType
+    pub if_block: Box<[Statement]>,
+    pub else_block: Option<ElseConditionalBlock>
 }
 
 #[derive(Debug)]
@@ -146,9 +142,9 @@ pub enum ExitArgument {
 
 #[derive(Debug)]
 pub struct SwitchStatement {
-    condition: Expression,
-    cases: Box<[SwitchCase]>,
-    otherwise: Option<Box<[Statement]>>
+    pub condition: Expression,
+    pub cases: Box<[SwitchCase]>,
+    pub otherwise: Option<Box<[Statement]>>
 }
 
 #[derive(Debug)]
@@ -738,19 +734,19 @@ fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equals:
 
 
         Token::Comma => {
-            error!("unexpected token at ({})", begin);
+            error!("unexpected token ',' at ({})", begin);
             return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
         },
         Token::Colon => {
-            error!("unexpected token at ({})", begin);
+            error!("unexpected token ':' at ({})", begin);
             return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::Colon) });
         },
         Token::CloseBracket => {
-            error!("unexpected token at ({})", begin);
+            error!("unexpected token ']' at ({})", begin);
             return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::CloseBracket) });
         },
         Token::CloseParenthesis => {
-            error!("unexpected token at ({})", begin);
+            error!("unexpected token ')' at ({})", begin);
             return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::CloseParenthesis) });
         },
 
@@ -893,7 +889,7 @@ fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equals:
                 while next < length {
                     match &tokens[next] {
                         Token::CloseParenthesis => {
-                            if commad {
+                            if commad && !args.is_empty() {
                                 debug!("unexpected trailing comma at ({})", next);
                                 return Err(ExpressionParseError:: UnexpectedToken { character: ",".into() });
                             }
@@ -1396,7 +1392,7 @@ fn parse_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statem
         next = reached + 1;
 
         if tokens[next] != Token::NewLine {
-            error!("expected a new line at ({})", next);
+            error!("unexpected ({:?}) at ({}). expected a new line", &tokens[next], next);
             return Err(StatementBlockParseError::ExpectedNewLine);
         }
 
@@ -1423,7 +1419,7 @@ fn parse_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statem
 }
 
 fn parse_conditional_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statement]>, usize), StatementBlockParseError> {
-    debug!("parsing a statement block");
+    debug!("parsing a conditional statement block");
     
     if cursor >= tokens.len() {
         error!("unexpected end of tokens");
@@ -1453,7 +1449,7 @@ fn parse_conditional_statement_block(tokens: &[Token], cursor: usize) -> Result<
         next = reached + 1;
 
         if tokens[next] != Token::NewLine {
-            error!("expected a new line at ({})", next);
+            error!("unexpected ({:?}) at ({}). expected a new line", &tokens[next], next);
             return Err(StatementBlockParseError::ExpectedNewLine);
         }
 
@@ -1648,34 +1644,16 @@ fn parse_assignment(tokens: &[Token], cursor: usize) -> Result<(Statement, usize
 
                                 let (parsed_expr, reached) = parse_expression(tokens, next, 0, true)?;
 
-                                next = reached + 1;
-
-                                if next >= tokens.len() {
-                                    error!("unexpected end of tokens at ({}). expected a new line", next);
-                                    trace!("<assignee>: <type_id> = <expression> >token<");
-                                    return Err(AssignmentParseError::UnexpectedEnd);
-                                }
-
-                                match &tokens[next] {
-                                    Token::NewLine => {
-                                        return Ok(
-                                            (
-                                                Statement::Assignment { 
-                                                    assignee: expr_parsed, 
-                                                    specified_type: Some(id), 
-                                                    expression: parsed_expr 
-                                                },
-                                                next
-                                            )
-                                        )
-                                    },
-
-                                    wt => {
-                                        error!("unexpected token at ({}). expected a new line", next);
-                                        trace!("<assignee>: <type_id> = <expression> >token<");
-                                        return Err(AssignmentParseError::UnexpectedToken(format!("{:?}", wt)));
-                                    }
-                                }
+                                return Ok(
+                                    (
+                                        Statement::Assignment { 
+                                            assignee: expr_parsed, 
+                                            specified_type: Some(id), 
+                                            expression: parsed_expr 
+                                        },
+                                        reached
+                                    )
+                                );
                             },
 
                             wop => {
@@ -1713,34 +1691,16 @@ fn parse_assignment(tokens: &[Token], cursor: usize) -> Result<(Statement, usize
 
                 let (parsed_expr, reached) = parse_expression(tokens, next, 0, true)?;
 
-                next = reached + 1;
-
-                if next >= tokens.len() {
-                    error!("unexpected end of tokens at ({}). expected a new line", next);
-                    trace!("<assignee> = .. >token<");
-                    return Err(AssignmentParseError::UnexpectedEnd);
-                }
-
-                match &tokens[next] {
-                    Token::NewLine => {
-                        return Ok(
-                            (
-                                Statement::Assignment { 
-                                    assignee: expr_parsed,
-                                    specified_type: None,
-                                    expression: parsed_expr 
-                                },
-                                next
-                            )
-                        )
-                    },
-
-                    wt => {
-                        error!("unexpected token ({:?}) at ({}). expected a new line", wt, next);
-                        trace!("<assignee> = .. >token<");
-                        return Err(AssignmentParseError::UnexpectedToken(format!("{:?}", wt)));
-                    }
-                }
+                return Ok(
+                    (
+                        Statement::Assignment { 
+                            assignee: expr_parsed,
+                            specified_type: None,
+                            expression: parsed_expr 
+                        },
+                        reached
+                    )
+                );
             },
 
             wop => {
@@ -1781,7 +1741,7 @@ fn parse_switch_case_statements_block(tokens: &[Token], cursor: usize) -> Result
                             return Err(CaseBlockParseError::UnexpectedEnd);
                         }
             
-                        if tokens[peek_next] == Token::Colon {
+                        if tokens[peek_next] == Token::Colon || tokens[peek_next] == Token::Comma {
                             if statements.is_empty() {
                                 error!("empty switch case statement");
                                 return Err(CaseBlockParseError::EmptyBlock);
@@ -1790,7 +1750,7 @@ fn parse_switch_case_statements_block(tokens: &[Token], cursor: usize) -> Result
                             return Ok(
                                 (
                                     statements.into(),
-                                    next
+                                    next - 1
                                 )
                             );
                         }
@@ -1808,12 +1768,32 @@ fn parse_switch_case_statements_block(tokens: &[Token], cursor: usize) -> Result
         next = reached;
 
         if next + 1 >= tokens.len() {
-            error!("unexpected end of tokens at ({})", next + 1);
+            error!("unexpected end of tokens at ({}). expected a new line", next + 1);
             return Err(CaseBlockParseError::UnexpectedEnd);
         }
 
-        if tokens[next + 1] == Token::Keyword(Keyword::End) {
-            let peek_next = next + 2;
+        next += 1;
+
+        while tokens[next] == Token::NewLine { 
+            next += 1;
+
+            if next >= tokens.len() {
+                error!("unexpected end of tokens at ({}). expected a new line", next);
+                return Err(CaseBlockParseError::UnexpectedEnd);
+            }
+        }
+
+        if tokens[next] == Token::Keyword(Keyword::Otherwise) {
+            return Ok(
+                (
+                    statements.into(),
+                    next - 1
+                )
+            );
+        }
+
+        if tokens[next] == Token::Keyword(Keyword::End) {
+            let peek_next = next + 1;
 
             if peek_next >= tokens.len() {
                 error!("unexpected end of tokens at ({}). expected 'case'", peek_next);
@@ -1824,13 +1804,11 @@ fn parse_switch_case_statements_block(tokens: &[Token], cursor: usize) -> Result
                 return Ok(
                     (
                         statements.into(),
-                        next
+                        next - 1
                     )
                 );
             }
         }
-
-        next += 1;
     }
 }
 
@@ -1846,7 +1824,7 @@ fn parse_switch_statement(tokens: &[Token], cursor: usize) -> Result<(SwitchStat
         Token::Keyword(k) => match k {
             Keyword::Case => { },
             wk => {
-                error!("unexpected keyword ({:?}) at ({})", wk, cursor);
+                error!("unexpected keyword({:?}) at ({})", wk, cursor);
                 return Err(SwitchParseError::UnexpectedToken);
             }
         },
@@ -1876,22 +1854,10 @@ fn parse_switch_statement(tokens: &[Token], cursor: usize) -> Result<(SwitchStat
         return Err(SwitchParseError::UnexpectedEnd);
     }
 
-    match &tokens[next] {
-        Token::Keyword(k) => match k {
-            Keyword::Of => { },
-
-            wk => {
-                error!("unexpected keyword ({:?}) at ({}). expected 'of'", wk, cursor);
-                trace!("case <expr> >token<");
-                return Err(SwitchParseError::UnexpectedToken);
-            }
-        },
-
-        wt => {
-            error!("unexpected token ({:?}) at ({}). expected 'of'", wt, cursor);
-            trace!("case <expr> >token<");
-            return Err(SwitchParseError::UnexpectedToken);
-        }
+    if tokens[next] != Token::Keyword(Keyword::Of) {
+        error!("unexpected token ({:?}) at ({}). expected 'of'", &tokens[next], cursor);
+        trace!("case <expr> >token<");
+        return Err(SwitchParseError::UnexpectedToken);
     }
 
     next += 1;
@@ -1902,17 +1868,7 @@ fn parse_switch_statement(tokens: &[Token], cursor: usize) -> Result<(SwitchStat
         return Err(SwitchParseError::UnexpectedEnd);
     }
 
-    match &tokens[next] {
-        Token::NewLine => { },
-
-        wt => {
-            error!("unexpected token ({:?}) at ({}). expected a new line", wt, cursor);
-            trace!("case <expr> of >token<");
-            return Err(SwitchParseError::UnexpectedToken);
-        }
-    }
-
-    next += 1;
+    while tokens[next] == Token::NewLine { next += 1; }
 
     if next >= tokens.len() {
         error!("unexpected end of tokens at ({})", next);
@@ -2016,54 +1972,58 @@ fn parse_switch_statement(tokens: &[Token], cursor: usize) -> Result<(SwitchStat
             },
 
             _ => {
-                let (pattern, p_reached) = parse_expression(tokens, next, 0, false)
-                    .map_err(|_| SwitchParseError::CasePattern)?;
+                let mut patterns = vec![];
 
-                match &pattern {
-                    Expression::Integer(_) |
-                    Expression::Float(_) |
-                    Expression::String(_) |
-                    Expression::Symbol(_) => {
+                'case_loop: loop {
+                    let (pattern, p_reached) = parse_expression(tokens, next, 0, false)
+                        .map_err(|_| SwitchParseError::CasePattern)?;
 
-                    },
-
-                    _ => {
-                        error!("invalid switch case pattern at ({})", next);
-                        return Err(SwitchParseError::InvalidCasePattern);
+                    
+                    match &pattern {
+                        Expression::Integer(_) |
+                        Expression::Float(_) |
+                        Expression::String(_) |
+                        Expression::Symbol(_) => {
+    
+                        },
+    
+                        _ => {
+                            error!("invalid switch case pattern at ({})", next);
+                            return Err(SwitchParseError::InvalidCasePattern);
+                        }
                     }
-                }
 
-                next = p_reached + 1;
+                    patterns.push(pattern);
+                
+                    next = p_reached + 1;
+    
+                    if next >= tokens.len() {
+                        error!("unexpected end of tokens at ({}). expected ':' or ','", next);
+                        return Err(SwitchParseError::UnexpectedEnd);
+                    }
+                    
+                    if tokens[next] != Token::Colon && tokens[next] != Token::Comma {
+                        error!("unexpected token at ({}). expected ':' or ','", next);
+                        return Err(SwitchParseError::UnexpectedToken);
+                    }
+    
+                    if tokens[next] == Token::Comma { next += 1; continue 'case_loop; }
 
-                if next >= tokens.len() {
-                    error!("unexpected end of tokens at ({}). expected ':'", next);
-                    return Err(SwitchParseError::UnexpectedEnd);
-                }
+                    if tokens[next] != Token::Colon { 
+                        error!("unexpected token ({:?}) at ({}). expected ':'", &tokens[next], next);
+                        return Err(SwitchParseError::UnexpectedToken); 
+                    }
 
-                if tokens[next] != Token::Colon {
-                    error!("unexpected token at ({}). expected ':'", next);
-                    return Err(SwitchParseError::UnexpectedToken);
+                    break 'case_loop;
                 }
 
                 next += 1;
 
-                if tokens[next] != Token::Colon {
-                    error!("unexpected token at ({}). expected a statement or a new line", next);
-                    return Err(SwitchParseError::UnexpectedToken);
-                }
-
-                if tokens[next] == Token::NewLine {
-                    next += 1;
-
-                    if tokens[next] != Token::Colon {
-                        error!("unexpected token at ({}). expected a statement", next);
-                        return Err(SwitchParseError::UnexpectedToken);
-                    }
-                }
+                while tokens[next] == Token::NewLine { next += 1; }
 
                 let (block, reached) = parse_switch_case_statements_block(tokens, next)?;
 
-                cases.push(SwitchCase{ pattern, block });
+                cases.push(SwitchCase{ patterns: patterns.into(), block });
 
                 next = reached;
             }
@@ -2163,7 +2123,7 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
                     return Err(ConditionalBlockParseError::UnexpectedEnd);
                 }
 
-                let (else_block, reached) = parse_statement_block(tokens, peek_next)
+                let (else_block, reached) = parse_conditional_statement_block(tokens, peek_next)
                     .map_err(|e| ConditionalBlockParseError::StatementParseError(e.to_string()))?;
 
                 let mut next = reached + 1;
@@ -2189,7 +2149,8 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
                     (
                         ConditionalBlock {
                             condition: cond_expr,
-                            branches: ConditionalBlockType::Binary { if_block, else_block }
+                            if_block,
+                            else_block: Some(ElseConditionalBlock::Else(else_block))
                         },
 
                         next
@@ -2202,7 +2163,19 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
                 return Err(ConditionalBlockParseError::UnexpectedToken(format!("{:?}", &tokens[peek_next])));
             }
 
-            return parse_condition(tokens, peek_next);
+            let (elseif_block, elseif_reached) = parse_condition(tokens, peek_next)?;
+
+            return Ok(
+                (
+                    ConditionalBlock {
+                        condition: cond_expr,
+                        if_block,
+                        else_block: Some(ElseConditionalBlock::ElseIf(Box::new(elseif_block)))
+                    },
+
+                    elseif_reached
+                )
+            );
         }
 
         if tokens[begin] != Token::Keyword(Keyword::End) {
@@ -2226,7 +2199,8 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
             (
                 ConditionalBlock {
                     condition: cond_expr,
-                    branches: ConditionalBlockType::Unary(if_block)
+                    if_block,
+                    else_block: None
                 },
 
                 begin
@@ -2273,10 +2247,8 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
                 (
                     ConditionalBlock {
                         condition: cond_expr,
-                        branches: ConditionalBlockType::Binary { 
-                            if_block: Box::new([ if_block ]),
-                            else_block: Box::new([ else_block ]) 
-                        }
+                        if_block: Box::new([ if_block ]),
+                        else_block: Some(ElseConditionalBlock::Else(Box::new([ else_block ]))),
                     },
 
                     reached
@@ -2293,7 +2265,8 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
             (
                 ConditionalBlock {
                     condition: cond_expr,
-                    branches: ConditionalBlockType::Unary(Box::new([ if_block ]))
+                    if_block: Box::new([ if_block ]),
+                    else_block: None
                 },
 
                 reached
