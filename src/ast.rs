@@ -1,9 +1,8 @@
-use std::num::Saturating;
 use std::{
     collections::HashMap,
     rc::Rc
 };
-use std::fmt::{format, Display, Formatter};
+use std::fmt::{Display, Formatter};
 use crate::tokens::{self, Operator, Token, Keyword};
 use thiserror;
 use log::{debug, error, trace};
@@ -148,6 +147,24 @@ pub struct SwitchStatement {
 }
 
 #[derive(Debug)]
+pub enum RepeatCondition {
+    While(Expression),
+
+    With {
+        iterator: Rc<str>,
+        begin: Expression,
+        end: Expression,
+        reversed: bool
+    }
+}
+
+#[derive(Debug)]
+pub struct RepeatStatement {
+    pub condition: RepeatCondition,
+    pub block: Box<[Statement]>
+}
+
+#[derive(Debug)]
 pub enum Statement {
     Assignment {
         assignee: Expression,
@@ -172,7 +189,7 @@ pub enum Statement {
     Exit(ExitArgument),
     Global(Box<[Rc<str>]>),
     TypeSpec,
-    Repeat,
+    Repeat(RepeatStatement),
 
     Return(Expression)
 }
@@ -418,11 +435,6 @@ pub enum SwitchParseError {
     InvalidCasePattern,
 }
 
-// #[derive(Debug, thiserror::Error)]
-// pub enum TheStatementParseError {
-
-// }
-
 #[derive(Debug, thiserror::Error)]
 pub enum PutStatementParseError {
     #[error("failed to parse put's expression")]
@@ -459,6 +471,9 @@ pub enum StatementParseError {
     #[error("failed to parse switch statement")]
     Switch,
 
+    #[error("failed to parse repeat statement")]
+    Repeat,
+
     #[error("failed to parse expression")]
     Expression(#[from] ExpressionParseError)
 }
@@ -488,6 +503,39 @@ pub enum ConditionalBlockParseError {
 
     #[error("failed to parse a statement")]
     StatementParseError(String)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RepeatParseError {
+    #[error("unexpected end of tokens")]
+    UnexpectedEnd,
+
+    #[error("unexpected token")]
+    UnexpectedToken,
+
+    #[error("failed to parse conditional expression")]
+    ConditionalExpression(#[from] ExpressionParseError),
+
+    #[error("failed to parse conditional assignment")]
+    ConditionalAssignment(#[from] AssignmentParseError),
+
+    #[error("invalid conditional assignment")]
+    InvalidConditionalAssignment,
+
+    #[error("failed to parse repeat statement block")]
+    StatementBlock(#[from] RepeatStatementBlockParseError)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RepeatStatementBlockParseError {
+    #[error("unexpected end of tokens")]
+    UnexpectedEnd,
+
+    #[error("unexpected token")]
+    UnexpectedToken,
+
+    #[error("failed to parse statement")]
+    Statement(#[from] StatementParseError)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1314,6 +1362,18 @@ pub fn parse_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, us
                 );
             },
 
+            Keyword::Repeat => {
+                let (repeat, reached) = parse_repeat_statement(tokens, cursor)
+                    .map_err(|_| StatementParseError::Repeat)?;
+
+                return Ok(
+                    (
+                        Statement::Repeat(repeat),
+                        reached
+                    )
+                );
+            },
+
             wk => {
                 error!("unexpected keyword at ({})", cursor);
                 return Err(StatementParseError::UnexpectedToken(format!("{:?}", wk)));
@@ -1364,58 +1424,6 @@ pub fn parse_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, us
             }
         }
     }
-}
-
-fn parse_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statement]>, usize), StatementBlockParseError> {
-    debug!("parsing a statement block");
-    
-    if cursor >= tokens.len() {
-        error!("unexpected end of tokens");
-        return Err(StatementBlockParseError::UnexpectedEnd);
-    }
-
-    let mut next = cursor;
-    let mut statements = vec![];
-
-    'statement_loop: loop {
-        if next >= tokens.len() {
-            error!("unexpected end of tokens at ({}). expected a statement or 'end'", next);
-            return Err(StatementBlockParseError::UnexpectedEnd);
-        }
-
-        debug!("parsing statement #{} at ({})", statements.len() + 1, next);
-
-        let (statement, reached) = parse_statement(tokens, next)?;
-
-        statements.push(statement);
-        
-        next = reached + 1;
-
-        if tokens[next] != Token::NewLine {
-            error!("unexpected ({:?}) at ({}). expected a new line", &tokens[next], next);
-            return Err(StatementBlockParseError::ExpectedNewLine);
-        }
-
-        let peek_next = next + 1;
-
-        if peek_next >= tokens.len() {
-            error!("unexpected end of tokens at ({}). expected a statement or 'end'", peek_next);
-            return Err(StatementBlockParseError::UnexpectedEnd);
-        }
-
-        if tokens[peek_next] == Token::Keyword(Keyword::End) {
-            break 'statement_loop;
-        }
-
-        next += 1;
-    }
-
-    Ok(
-        (
-            statements.into(),
-            next
-        )
-    )
 }
 
 fn parse_conditional_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statement]>, usize), StatementBlockParseError> {
@@ -1577,7 +1585,7 @@ fn parse_global_dec_statement(tokens: &[Token], cursor: usize) -> Result<(Box<[R
                 break 'g_loop;
             },
 
-            wt => {
+            _ => {
                 error!("unexpected token at ({})", next);
                 return Err(GlobalDeclarationsParseError::UnexpectedError);
             }
@@ -1809,6 +1817,64 @@ fn parse_switch_case_statements_block(tokens: &[Token], cursor: usize) -> Result
                 );
             }
         }
+    }
+}
+
+/// consumes 'end repeat'
+fn parse_repeat_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statement]>, usize), RepeatStatementBlockParseError> {
+    use RepeatStatementBlockParseError::*;
+
+    debug!("parsing repeat statement block at ({})", cursor);
+
+    let mut statements = vec![];
+
+    let mut next = cursor;
+
+    loop {
+        if next >= tokens.len() {
+            error!("unexpected end of tokens at ({}). expected a new line, statement, or 'end'", next);
+            return Err(UnexpectedEnd);
+        }
+
+        while tokens[next] == Token::NewLine {
+            next += 1;
+    
+            if next >= tokens.len() {
+                error!("unexpected end of tokens at ({}). expected a new line, statement, or 'end'", next);
+                return Err(UnexpectedEnd);
+            }
+        }
+    
+        if tokens[next] == Token::Keyword(Keyword::End) {
+            let peek = next + 1;
+
+            if peek >= tokens.len() {
+                error!("unexpected end of tokens at ({}). expected 'repeat'", peek);
+                return Err(UnexpectedEnd);
+            }
+
+            if tokens[peek] != Token::Keyword(Keyword::Repeat) {
+                error!("unexpected token ({:?}) at ({}). expected 'repeat'", &tokens[peek], peek);
+                return Err(UnexpectedToken);
+            }
+
+            return Ok(
+                (
+                    statements.into(),
+                    peek
+                )
+            );
+        }
+
+        debug!("parsing repeat statement #({})", statements.len() + 1);
+
+        let (statement, reached) = parse_statement(tokens, next)?;
+
+        statements.push(statement);
+
+        next = reached + 1;
+
+        debug!("successfully parsed statement #({}). reached ({})", statements.len(), next);
     }
 }
 
@@ -2273,6 +2339,139 @@ fn parse_condition(tokens: &[Token], cursor: usize) -> Result<(ConditionalBlock,
             )
         );
     }
+}
+
+fn parse_repeat_statement(tokens: &[Token], cursor: usize) -> Result<(RepeatStatement, usize), RepeatParseError> {
+    use RepeatParseError::*;
+    
+    if cursor >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected 'repeat'", cursor);
+        return Err(UnexpectedEnd);
+    }
+
+    if tokens[cursor] != Token::Keyword(Keyword::Repeat) {
+        error!("unexpected token ({:?}) at ({}). expected 'repeat'", &tokens[cursor], cursor);
+        return Err(UnexpectedToken);
+    }
+
+    let mut next = cursor + 1;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected 'with' or 'while'", next);
+        return Err(UnexpectedEnd);
+    }
+
+
+    let (condition, reached): (RepeatCondition, usize) = match &tokens[next] {
+        Token::Keyword(k) => match k {
+            Keyword::With => {
+                next += 1;
+
+                if next >= tokens.len() {
+                    error!("unexpected end of tokens at ({}). expected an assignment", next);
+                    return Err(UnexpectedEnd);
+                }
+
+                let (statement, reached) = parse_assignment(tokens, next)?;
+
+                match statement {
+                    Statement::Assignment { assignee, expression, .. } => {
+                        
+                        let (begin, end, reversed) = match expression {
+                            Expression::Range { begin, end } => Ok((begin, end, false)),
+                            Expression::InverseRange { begin, end } => Ok((begin, end, true)),
+                            
+                            _ => {
+                                error!("invalid conditional assignment. expected a range");
+                                Err(InvalidConditionalAssignment)
+                            }
+                        }?;
+
+                        if let Expression::Identifier(iden) = assignee {
+                            Ok(
+                                (
+                                    RepeatCondition::With { 
+                                        iterator: iden, 
+                                        begin: *begin, 
+                                        end: *end, 
+                                        reversed
+                                    },
+
+                                    reached
+                                )
+                            )
+                        } else {
+                            error!("invalid conditional assignment. iterator must be an identifier");
+                            Err(InvalidConditionalAssignment)
+                        }
+                    },
+
+                    _ => {
+                        error!("invalid conditional assignment at ({})", next);
+                        return Err(InvalidConditionalAssignment);
+                    }
+                }
+            },
+
+            Keyword::While => {
+                next += 1;
+
+                if next >= tokens.len() {
+                    error!("unexpected end of tokens at ({}). expected an expression", next);
+                    return Err(UnexpectedEnd);
+                }
+
+                let (expr, reached) = parse_expression(
+                    tokens, 
+                    next, 
+                    0, 
+                    true
+                )?;
+
+                Ok(
+                    (
+                        RepeatCondition::While(expr),
+                        reached
+                    )
+                )
+            },
+
+            wk => {
+                error!("unexpected keyword token ({:?}) at ({}). expected 'with' or 'while'", wk, next);
+                return Err(UnexpectedToken);    
+            }
+        },
+
+        wt => {
+            error!("unexpected token ({:?}) at ({}). expected 'with' or 'while'", wt, next);
+            return Err(UnexpectedToken);
+        }
+    }?;
+
+    next = reached + 1;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected a new line", next);
+        return Err(UnexpectedEnd);
+    }
+
+    if tokens[next] != Token::NewLine {
+        error!("unexpected token ({:?}) at ({}). expected a new line", &tokens[next], next);
+        return Err(UnexpectedToken);
+    }
+
+    let (block, reached) = parse_repeat_statement_block(tokens, next)?;
+
+    Ok(
+        (
+            RepeatStatement {
+                condition,
+                block
+            },
+
+            reached
+        )
+    )
 }
 
 pub fn parse_tokens<T : AsRef<[Token]>>(tokens: T) -> Result<Expression, ExpressionParseError> {
