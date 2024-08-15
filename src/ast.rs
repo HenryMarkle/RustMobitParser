@@ -172,7 +172,7 @@ pub struct TypeCast {
 }
 
 #[derive(Debug)]
-pub struct FunctionParameter {
+pub struct Variable {
     pub identifier:         Rc<str>,
     pub type_identifier:    Option<Rc<str>>
 }
@@ -200,24 +200,26 @@ pub enum Statement {
     The(TheStatement),
 
     Exit(ExitArgument),
-    Global(Box<[Rc<str>]>),
+    Global(Box<[ Variable ]>),
+    Property(Box<[ Variable ]>),
     TypeSpec(TypeCast),
     Repeat(RepeatStatement),
 
     Return(Expression)
 }
 
+
 #[derive(Debug)]
 pub struct Function {
     pub name:       Rc<str>,
-    pub parameters: Box<[FunctionParameter]>,
+    pub parameters: Box<[Variable]>,
     pub block:      Box<[Statement]>
 }
 
 #[derive(Debug)]
 pub struct Script {
-    pub globals:    Box<[Rc<str>]>,
-    pub properties: Box<[Rc<str>]>,
+    pub globals:    Box<[ Variable ]>,
+    pub properties: Box<[ Variable ]>,
     pub functions:  Box<[Function]>
 }
 
@@ -423,11 +425,15 @@ pub enum AssignmentParseError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum GlobalDeclarationsParseError {
+pub enum VariableDeclarationsParseError {
     #[error("unexpected error")]
     UnexpectedError,
 
+    #[error("unexpected end of tokens")]
+    UnexpectedEnd,
 
+    #[error("failed to parse variable declaration")]
+    Variable(#[from] VariableParseError)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -500,7 +506,7 @@ pub enum StatementParseError {
     Put(#[from] PutStatementParseError),
 
     #[error("failed to parse global declaration statement")]
-    Global(#[from] GlobalDeclarationsParseError),
+    Global(#[from] VariableDeclarationsParseError),
     
     #[error("failed to parse switch statement")]
     Switch,
@@ -594,7 +600,7 @@ pub enum TypeCastStatementParseError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum FunctionParameterParseError {
+pub enum VariableParseError {
     #[error("unexpected end of tokens")]
     UnexpectedEnd,
 
@@ -623,10 +629,22 @@ pub enum FunctionParseError {
     InvalidName,
 
     #[error("invalid function parameter. expected an identifier")]
-    Prameter(#[from] FunctionParameterParseError),
+    Prameter(#[from] VariableParseError),
 
     #[error("failed to parse function block statement")]
     BlockStatement(#[from] StatementParseError)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ScriptParseError {
+    #[error("script is empty")]
+    Empty,
+
+    #[error("failed to parse global variables")]
+    Variable(#[from] VariableDeclarationsParseError),
+
+    #[error("failed to parse function")]
+    Function(#[from] FunctionParseError)
 }
 
 fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equals: bool) -> Result<(Expression, usize), ExpressionParseError> {
@@ -1314,15 +1332,26 @@ fn parse_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, usize)
             },
 
             Keyword::Global => {
-                let (globals, reached) = parse_global_dec_statement(tokens, cursor)?;
+                let (globals, reached) = parse_variable_declarations(tokens, cursor + 1)?;
 
                 return Ok(
                     (
-                        Statement::Global(globals),
+                        Statement::Global(globals.into()),
                         reached
                     )
                 );
             },
+
+            Keyword::Property => {
+                let (globals, reached) = parse_variable_declarations(tokens, cursor + 1)?;
+
+                return Ok(
+                    (
+                        Statement::Property(globals.into()),
+                        reached
+                    )
+                );
+            }
 
             Keyword::Exit => {
                 let mut next = cursor + 1;
@@ -1582,8 +1611,8 @@ fn parse_type_cast_statement(tokens: &[Token], cursor: usize) -> Result<(TypeCas
     )
 }
 
-fn parse_function_parameter(tokens: &[Token], cursor: usize) -> Result<(FunctionParameter, usize), FunctionParameterParseError> {
-    use FunctionParameterParseError::*;
+fn parse_variable_declaration(tokens: &[Token], cursor: usize) -> Result<(Variable, usize), VariableParseError> {
+    use VariableParseError::*;
     
     debug!("parsing a function parameter at ({})", cursor);
 
@@ -1616,7 +1645,7 @@ fn parse_function_parameter(tokens: &[Token], cursor: usize) -> Result<(Function
     if tokens[peek] != Token::Colon {
         return Ok(
             (
-                FunctionParameter {
+                Variable {
                     identifier,
                     type_identifier: None
                 },
@@ -1642,7 +1671,7 @@ fn parse_function_parameter(tokens: &[Token], cursor: usize) -> Result<(Function
 
     Ok(
         (
-            FunctionParameter {
+            Variable {
                 identifier,
                 type_identifier: Some(type_identifier)
             },
@@ -1778,7 +1807,12 @@ fn parse_put_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, us
     }
 }
 
-fn parse_global_dec_statement(tokens: &[Token], cursor: usize) -> Result<(Box<[Rc<str>]>, usize), GlobalDeclarationsParseError> {
+fn parse_variable_declarations(tokens: &[Token], cursor: usize) -> Result<(Vec<Variable>, usize), VariableDeclarationsParseError> {
+    if cursor >= tokens.len() {
+        error!("unexpected end of tokens at ({})", cursor);
+        return Err(VariableDeclarationsParseError::UnexpectedEnd);
+    }
+    
     let mut identifiers = vec![];
 
     let mut commad = true;
@@ -1787,21 +1821,24 @@ fn parse_global_dec_statement(tokens: &[Token], cursor: usize) -> Result<(Box<[R
 
     'g_loop: while next < tokens.len() {
         match &tokens[next] {
-            Token::Identifier(i) => {
+            Token::Identifier(_) => {
                 if !commad {
                     error!("expected a comma at ({})", next);
-                    return Err(GlobalDeclarationsParseError::UnexpectedError);
+                    return Err(VariableDeclarationsParseError::UnexpectedError);
                 }
 
                 commad = false;
 
-                identifiers.push(Rc::clone(i));
+                let (parsed_var, reached) = parse_variable_declaration(tokens, next)?;
+
+                identifiers.push(parsed_var);
+                next = reached;
             },
 
             Token::Comma => {
                 if commad {
                     error!("unexpected comma at ({})", next);
-                    return Err(GlobalDeclarationsParseError::UnexpectedError);
+                    return Err(VariableDeclarationsParseError::UnexpectedError);
                 }
 
                 commad = true;
@@ -1813,7 +1850,7 @@ fn parse_global_dec_statement(tokens: &[Token], cursor: usize) -> Result<(Box<[R
 
             _ => {
                 error!("unexpected token at ({})", next);
-                return Err(GlobalDeclarationsParseError::UnexpectedError);
+                return Err(VariableDeclarationsParseError::UnexpectedError);
             }
         }
 
@@ -1821,7 +1858,7 @@ fn parse_global_dec_statement(tokens: &[Token], cursor: usize) -> Result<(Box<[R
     }
 
     Ok((
-        identifiers.into(),
+        identifiers,
         next
     ))
 }
@@ -2817,7 +2854,7 @@ fn parse_function(tokens: &[Token], cursor: usize) -> Result<(Function, usize), 
                 return Err(UnexpectedEnd);
             }
     
-            let (param, reached) = parse_function_parameter(tokens, next)?;
+            let (param, reached) = parse_variable_declaration(tokens, next)?;
 
             params.push(param);
     
@@ -2841,7 +2878,7 @@ fn parse_function(tokens: &[Token], cursor: usize) -> Result<(Function, usize), 
             return Err(UnexpectedToken);
         }
 
-        Result::<Vec<FunctionParameter>, FunctionParseError>::Ok(params)
+        Result::<Vec<Variable>, FunctionParseError>::Ok(params)
     } else {
         let mut params = vec![];
 
@@ -2858,7 +2895,7 @@ fn parse_function(tokens: &[Token], cursor: usize) -> Result<(Function, usize), 
                 return Err(UnexpectedEnd);
             }
     
-            let (param, reached) = parse_function_parameter(tokens, next)?;
+            let (param, reached) = parse_variable_declaration(tokens, next)?;
 
             params.push(param);
     
@@ -2891,6 +2928,77 @@ fn parse_function(tokens: &[Token], cursor: usize) -> Result<(Function, usize), 
 }
 
 /// consumes the entire token stream
-fn parse_script<T: AsRef<[Token]>>(tokens: T) {
-    todo!();
+fn parse_script<T: AsRef<[Token]>>(tokens: T) -> Result<Script, ScriptParseError> {
+    use ScriptParseError::*;
+    use Token::{
+        Keyword
+    };
+    use tokens::Keyword::{
+        On,
+        Global,
+        Property
+    };
+
+    debug!("parsing script");
+    
+    let tokens = tokens.as_ref();
+    
+    if tokens.is_empty() { return Err(Empty); }
+    
+    let mut cursor = 0;
+
+    let mut globals = vec![];
+    let mut properties = vec![];
+    let mut functions = vec![];
+
+    while cursor < tokens.len() {
+        match &tokens[cursor] {
+            Keyword(k) => match k {
+                Global => {
+                    if cursor + 1 < tokens.len() {
+                        let (mut parsed_globals, reached) = parse_variable_declarations(
+                            tokens, 
+                            cursor + 1
+                        )?;
+    
+                        globals.append(&mut parsed_globals);
+                        cursor = reached;
+                    } else {
+                        cursor += 1;
+                    }
+                },
+
+                Property => {
+                    if cursor + 1 < tokens.len() {
+                        let (mut parsed_properties, reached) = parse_variable_declarations(
+                            tokens, 
+                            cursor + 1
+                        )?;
+    
+                        properties.append(&mut parsed_properties);
+                        cursor = reached;
+                    } else {
+                        cursor += 1;
+                    }
+                },
+                
+                On => {
+                    let (parsed_func, reached) = parse_function(tokens, cursor)?;
+                
+                    functions.push(parsed_func);
+                    cursor = reached;
+                },
+
+                _ => {  }
+            },
+
+            _ => {}
+        }
+    }
+
+    Ok(Script {
+        functions: functions.into(),
+        globals: globals.into(),
+        properties: properties.into()
+    })
 }
