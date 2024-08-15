@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::{
     collections::HashMap,
     rc::Rc
@@ -165,6 +166,18 @@ pub struct RepeatStatement {
 }
 
 #[derive(Debug)]
+pub struct TypeCast {
+    pub identifier:         Rc<str>,
+    pub type_identifier:    Rc<str>
+}
+
+#[derive(Debug)]
+pub struct FunctionParameter {
+    pub identifier:         Rc<str>,
+    pub type_identifier:    Option<Rc<str>>
+}
+
+#[derive(Debug)]
 pub enum Statement {
     Assignment {
         assignee: Expression,
@@ -188,10 +201,24 @@ pub enum Statement {
 
     Exit(ExitArgument),
     Global(Box<[Rc<str>]>),
-    TypeSpec,
+    TypeSpec(TypeCast),
     Repeat(RepeatStatement),
 
     Return(Expression)
+}
+
+#[derive(Debug)]
+pub struct Function {
+    pub name:       Rc<str>,
+    pub parameters: Box<[FunctionParameter]>,
+    pub block:      Box<[Statement]>
+}
+
+#[derive(Debug)]
+pub struct Script {
+    pub globals:    Box<[Rc<str>]>,
+    pub properties: Box<[Rc<str>]>,
+    pub functions:  Box<[Function]>
 }
 
 impl TryFrom<&tokens::Operator> for BinaryOperator {
@@ -199,29 +226,30 @@ impl TryFrom<&tokens::Operator> for BinaryOperator {
 
     fn try_from(value: &tokens::Operator) -> Result<Self, Self::Error> {
         use BinaryOperator::*;
+        use tokens::Operator;
 
         match value {
-            tokens::Operator::Concatenation => Ok(Concatenation),
-            tokens::Operator::SpaceConcatenation => Ok(SpaceConcatenation),
+            Operator::Concatenation => Ok(Concatenation),
+            Operator::SpaceConcatenation => Ok(SpaceConcatenation),
 
-            tokens::Operator::Or => Ok(Or),
-            tokens::Operator::And => Ok(And),
+            Operator::Or => Ok(Or),
+            Operator::And => Ok(And),
 
-            tokens::Operator::Addition => Ok(Addition),
-            tokens::Operator::Subtraction => Ok(Subtraction),
-            tokens::Operator::Multiplication => Ok(Multiplication),
-            tokens::Operator::Division => Ok(Division),
-            tokens::Operator::Mod => Ok(Mod),
+            Operator::Addition => Ok(Addition),
+            Operator::Subtraction => Ok(Subtraction),
+            Operator::Multiplication => Ok(Multiplication),
+            Operator::Division => Ok(Division),
+            Operator::Mod => Ok(Mod),
 
-            tokens::Operator::Inequality => Ok(NotEqual),
+            Operator::Inequality => Ok(NotEqual),
 
-            tokens::Operator::Contains => Ok(Contains),
+            Operator::Contains => Ok(Contains),
 
-            tokens::Operator::Greater => Ok(Greater),
-            tokens::Operator::Smaller => Ok(Smaller),
-            tokens::Operator::GreaterOrEqual => Ok(GreaterOrEqual),
-            tokens::Operator::SmallerOrEqual => Ok(SmallerOrEqual),
-            tokens::Operator::AssignmentOrEquality => Ok(Equal),
+            Operator::Greater => Ok(Greater),
+            Operator::Smaller => Ok(Smaller),
+            Operator::GreaterOrEqual => Ok(GreaterOrEqual),
+            Operator::SmallerOrEqual => Ok(SmallerOrEqual),
+            Operator::AssignmentOrEquality => Ok(Equal),
 
             _ => Err(())
         }
@@ -252,34 +280,38 @@ impl TryFrom<&tokens::Operator> for UnaryOperator {
 
 impl Display for BinaryOperator {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        use BinaryOperator::*;
+
         write!(f, "{}", match self {
-            BinaryOperator::And => "and",
-            BinaryOperator::Or => "or",
-            BinaryOperator::Addition => "+",
-            BinaryOperator::Subtraction => "-",
-            BinaryOperator::Multiplication => "*",
-            BinaryOperator::Division => "/",
-            BinaryOperator::Greater => ">",
-            BinaryOperator::Smaller => "<",
-            BinaryOperator::GreaterOrEqual => ">=",
-            BinaryOperator::SmallerOrEqual => "<=",
-            BinaryOperator::Contains => "contains",
-            BinaryOperator::Starts => "starts",
-            BinaryOperator::Concatenation => "&",
-            BinaryOperator::SpaceConcatenation => "&&",
-            BinaryOperator::Mod => "mod",
-            BinaryOperator::Equal => "=",
-            BinaryOperator::NotEqual => "<>",
+            And                 => "and",
+            Or                  => "or",
+            Addition            => "+",
+            Subtraction         => "-",
+            Multiplication      => "*",
+            Division            => "/",
+            Greater             => ">",
+            Smaller             => "<",
+            GreaterOrEqual      => ">=",
+            SmallerOrEqual      => "<=",
+            Contains            => "contains",
+            Starts              => "starts",
+            Concatenation       => "&",
+            SpaceConcatenation  => "&&",
+            Mod                 => "mod",
+            Equal               => "=",
+            NotEqual            => "<>",
         })
     }
 }
 
 impl Display for UnaryOperator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use UnaryOperator::*;
+        
         write!(f, "{}", match self {
-            UnaryOperator::Negate => "not",
-            UnaryOperator::Negative => "-",
-            UnaryOperator::Positive => "+",
+            Negate   => "not ",
+            Negative => "-",
+            Positive => "+",
         })
     }
 }
@@ -311,26 +343,28 @@ impl Display for PostOperator {
 }
 
 fn op_precedence(op: &tokens::Operator) -> u8 {
+    use tokens::Operator::*;
+    
     match op {
-        tokens::Operator::Dot => 6,
-        tokens::Operator::Contains => 1,
-        tokens::Operator::Starts => 1,
-        tokens::Operator::Concatenation => 2,
-        tokens::Operator::SpaceConcatenation => 2,
-        tokens::Operator::Or => 4,
-        tokens::Operator::And => 4,
-        tokens::Operator::Addition => 3,
-        tokens::Operator::Subtraction => 3,
-        tokens::Operator::Multiplication => 4,
-        tokens::Operator::Division => 4,
-        tokens::Operator::Mod => 4,
-        tokens::Operator::Inequality => 1,
-        tokens::Operator::Greater => 1,
-        tokens::Operator::Smaller => 1,
-        tokens::Operator::GreaterOrEqual => 1,
-        tokens::Operator::SmallerOrEqual => 1,
-        tokens::Operator::AssignmentOrEquality => 0,
-        tokens::Operator::Not => 5
+        Dot                     => 6,
+        Contains                => 1,
+        Starts                  => 1,
+        Concatenation           => 2,
+        SpaceConcatenation      => 2,
+        Or                      => 4,
+        And                     => 4,
+        Addition                => 3,
+        Subtraction             => 3,
+        Multiplication          => 4,
+        Division                => 4,
+        Mod                     => 4,
+        Inequality              => 1,
+        Greater                 => 1,
+        Smaller                 => 1,
+        GreaterOrEqual          => 1,
+        SmallerOrEqual          => 1,
+        AssignmentOrEquality    => 0,
+        Not                     => 5
     }
 }
 
@@ -474,6 +508,9 @@ pub enum StatementParseError {
     #[error("failed to parse repeat statement")]
     Repeat,
 
+    #[error("failed to parse type cast statement")]
+    TypeCast(#[from] TypeCastStatementParseError),
+
     #[error("failed to parse expression")]
     Expression(#[from] ExpressionParseError)
 }
@@ -539,16 +576,57 @@ pub enum RepeatStatementBlockParseError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ParseError {
+pub enum TypeCastStatementParseError {
+    #[error("unexpected end of tokens")]
+    UnexpectedEnd,
 
-    #[error("failed to parse expression")]
-    Expression(#[from] ExpressionParseError),
+    #[error("unexpected token")]
+    UnexpectedToken,
 
-    #[error("failed to parse statement")]
-    Statement(#[from] StatementParseError),
+    #[error("invalid casted identifier")]
+    InvalidIdentifier,
 
-    #[error("failed to parse conditition")]
-    Condition(#[from] ConditionalBlockParseError)
+    #[error("invalid type identifier")]
+    InvalidType,
+
+    #[error("failed to parse type cast identifier expression")]
+    IdentifierParse(#[from] ExpressionParseError)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum FunctionParameterParseError {
+    #[error("unexpected end of tokens")]
+    UnexpectedEnd,
+
+    #[error("unexpected token")]
+    UnexpectedToken,
+
+    #[error("invalid casted identifier")]
+    InvalidIdentifier,
+
+    #[error("invalid type identifier")]
+    InvalidType,
+
+    #[error("failed to parse type cast identifier expression")]
+    IdentifierParse(#[from] ExpressionParseError)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum FunctionParseError {
+    #[error("unexpected end of tokens")]
+    UnexpectedEnd,
+
+    #[error("unexpected token")]
+    UnexpectedToken,
+
+    #[error("invalid function name. expected an identifier")]
+    InvalidName,
+
+    #[error("invalid function parameter. expected an identifier")]
+    Prameter(#[from] FunctionParameterParseError),
+
+    #[error("failed to parse function block statement")]
+    BlockStatement(#[from] StatementParseError)
 }
 
 fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equals: bool) -> Result<(Expression, usize), ExpressionParseError> {
@@ -1203,7 +1281,7 @@ fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equals:
     Ok((subtree, begin))
 }
 
-pub fn parse_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, usize), StatementParseError> {
+fn parse_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, usize), StatementParseError> {
     debug!("parsing a statement at ({})", cursor);
     
     if cursor >= tokens.len() {
@@ -1374,6 +1452,17 @@ pub fn parse_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, us
                 );
             },
 
+            Keyword::Type => {
+                let (cast, reached) = parse_type_cast_statement(tokens, cursor)?;
+            
+                return Ok(
+                    (
+                        Statement::TypeSpec(cast),
+                        reached
+                    )
+                );
+            },
+
             wk => {
                 error!("unexpected keyword at ({})", cursor);
                 return Err(StatementParseError::UnexpectedToken(format!("{:?}", wk)));
@@ -1424,6 +1513,143 @@ pub fn parse_statement(tokens: &[Token], cursor: usize) -> Result<(Statement, us
             }
         }
     }
+}
+
+fn parse_type_cast_statement(tokens: &[Token], cursor: usize) -> Result<(TypeCast, usize), TypeCastStatementParseError> {
+    use TypeCastStatementParseError::*;
+    
+    debug!("parsing a type cast at ({})", cursor);
+
+    if cursor >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected 'type'", cursor);
+        return Err(UnexpectedEnd);
+    }
+
+    if tokens[cursor] != Token::Keyword(Keyword::Type) {
+        error!("unexpected token ({:?}) at ({}). expected 'type'", &tokens[cursor], cursor);
+        return Err(UnexpectedToken);
+    }
+
+    let mut next = cursor + 1;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected an identifer", next);
+        return Err(UnexpectedEnd);
+    }
+
+    let identifier = if let Token::Identifier(iden) = &tokens[next] {
+        Ok(Rc::clone(iden))
+    } else {
+        error!("unexpected token ({:?}) at ({}). expected an identifier", &tokens[next], next);
+        Err(InvalidIdentifier)
+    }?;
+
+    next += 1;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected ':'", next);
+        return Err(UnexpectedEnd);
+    }
+
+    if tokens[next] != Token::Colon {
+        error!("unexpected token ({:?}) at ({}). expected ':'", &tokens[cursor], cursor);
+        return Err(UnexpectedToken);
+    }
+
+    next += 1;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected an identifier", next);
+        return Err(UnexpectedEnd);
+    }
+
+    let type_identifier = if let Token::Identifier(iden) = &tokens[next] {
+        Ok(Rc::clone(iden))
+    } else {
+        error!("unexpected token ({:?}) at ({}). expected a type identifier", &tokens[next], next);
+        Err(InvalidType)
+    }?;
+
+    Ok(
+        (
+            TypeCast {
+                identifier,
+                type_identifier
+            },
+
+            next
+        )
+    )
+}
+
+fn parse_function_parameter(tokens: &[Token], cursor: usize) -> Result<(FunctionParameter, usize), FunctionParameterParseError> {
+    use FunctionParameterParseError::*;
+    
+    debug!("parsing a function parameter at ({})", cursor);
+
+    if cursor >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected 'type'", cursor);
+        return Err(UnexpectedEnd);
+    }
+
+    let mut next = cursor;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected an identifer", next);
+        return Err(UnexpectedEnd);
+    }
+
+    let identifier = if let Token::Identifier(iden) = &tokens[next] {
+        Ok(Rc::clone(iden))
+    } else {
+        error!("unexpected token ({:?}) at ({}). expected an identifier", &tokens[next], next);
+        Err(InvalidIdentifier)
+    }?;
+
+    let peek = next + 1;
+
+    if peek >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected ':'", peek);
+        return Err(UnexpectedEnd);
+    }
+
+    if tokens[peek] != Token::Colon {
+        return Ok(
+            (
+                FunctionParameter {
+                    identifier,
+                    type_identifier: None
+                },
+
+                next
+            )
+        );
+    }
+
+    next += 2;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected an identifier", next);
+        return Err(UnexpectedEnd);
+    }
+
+    let type_identifier = if let Token::Identifier(iden) = &tokens[next] {
+        Ok(Rc::clone(iden))
+    } else {
+        error!("unexpected token ({:?}) at ({}). expected a type identifier", &tokens[next], next);
+        Err(InvalidType)
+    }?;
+
+    Ok(
+        (
+            FunctionParameter {
+                identifier,
+                type_identifier: Some(type_identifier)
+            },
+
+            next
+        )
+    )
 }
 
 fn parse_conditional_statement_block(tokens: &[Token], cursor: usize) -> Result<(Box<[Statement]>, usize), StatementBlockParseError> {
@@ -2361,7 +2587,6 @@ fn parse_repeat_statement(tokens: &[Token], cursor: usize) -> Result<(RepeatStat
         return Err(UnexpectedEnd);
     }
 
-
     let (condition, reached): (RepeatCondition, usize) = match &tokens[next] {
         Token::Keyword(k) => match k {
             Keyword::With => {
@@ -2474,9 +2699,198 @@ fn parse_repeat_statement(tokens: &[Token], cursor: usize) -> Result<(RepeatStat
     )
 }
 
-pub fn parse_tokens<T : AsRef<[Token]>>(tokens: T) -> Result<Expression, ExpressionParseError> {
-    match parse_expression(tokens.as_ref(), 0, 0, true) {
-        Ok((node, _)) => Ok(node),
-        Err(e) => Err(e)
+fn parse_function_block(tokens: &[Token], cursor: usize, name: &str) -> Result<(Box<[Statement]>, usize), FunctionParseError> {
+    use FunctionParseError::*;
+    
+    debug!("parsing a function block at ({})", cursor);
+
+    let mut next = cursor;
+
+    let mut statements = vec![];
+
+    loop {
+        if next >= tokens.len() {
+            error!("unexpected end of tokens at ({}). expected a new line, statement, or 'end'", next);
+            return Err(UnexpectedEnd);
+        }
+
+        while tokens[next] == Token::NewLine {
+            next += 1;
+    
+            if next >= tokens.len() {
+                error!("unexpected end of tokens at ({}). expected a new line, statement, or 'end'", next);
+                return Err(UnexpectedEnd);
+            }
+        }
+
+        if tokens[next] == Token::Keyword(Keyword::End) {
+            let peek = next + 1;
+
+            if peek >= tokens.len() {
+                error!("unexpected end of tokens at ({}). expected 'repeat'", peek);
+                return Err(UnexpectedEnd);
+            }
+
+            if let Token::Identifier(iden) = &tokens[peek] {
+                if iden.as_ref() != name {
+                    error!("function 'end' identifier does not match with function's name ({:?}) at ({}). expected '{}'", 
+                        &tokens[peek], 
+                        peek, 
+                        name.borrow()
+                    );
+
+                    return Err(UnexpectedToken);
+                }
+            } else {
+                error!("unexpected token ({:?}) at ({}). expected 'repeat'", &tokens[peek], peek);
+                return Err(UnexpectedToken);
+            }
+
+            return Ok(
+                (
+                    statements.into(),
+                    peek
+                )
+            );
+        }
+
+        debug!("parsing function statement #({})", statements.len() + 1);
+
+        let (statement, reached) = parse_statement(tokens, next)?;
+
+        statements.push(statement);
+
+        next = reached + 1;
+
+        debug!("successfully parsed function statement #({}). reached ({})", statements.len(), next);
     }
+}
+
+fn parse_function(tokens: &[Token], cursor: usize) -> Result<(Function, usize), FunctionParseError> {
+    use FunctionParseError::*;
+
+    debug!("parsing a function");
+
+    if cursor >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected 'on'", cursor);
+        return Err(UnexpectedEnd);
+    }
+
+    if tokens[cursor] != Token::Keyword(Keyword::On) {
+        error!("unexpected token ({:?}) at ({}). expected 'at'", tokens[cursor], cursor);
+        return Err(UnexpectedToken);
+    }
+
+    let mut next = cursor + 1;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected a function identifier", next);
+        return Err(UnexpectedEnd);
+    }
+
+    let name = if let Token::Identifier(iden) = &tokens[next] {
+        Ok(Rc::clone(iden))
+    } else {
+        Err(InvalidName)
+    }?;
+
+    next += 1;
+
+    if next >= tokens.len() {
+        error!("unexpected end of tokens at ({}). expected function parameters or a new line", next);
+        return Err(UnexpectedEnd);
+    }
+
+    let parameters = if tokens[next] == Token::OpenParenthesis {
+        let mut params = vec![];
+
+        while tokens[next] != Token::CloseParenthesis {
+            if tokens[next] != Token::Comma && !params.is_empty() {
+                error!("unexpected token ({:?}) at ({}). expected a comma", &tokens[next], next);
+                return Err(UnexpectedToken);
+            }
+
+            next += 1;
+
+            if next >= tokens.len() {
+                error!("unexpected end of tokens at ({}). expected a function parameter", next);
+                return Err(UnexpectedEnd);
+            }
+    
+            let (param, reached) = parse_function_parameter(tokens, next)?;
+
+            params.push(param);
+    
+            next = reached + 1;
+    
+            if next >= tokens.len() {
+                error!("unexpected end of tokens at ({}). expected a function parameter", next);
+                return Err(UnexpectedEnd);
+            }
+        }
+
+        next += 1;
+
+        if next >= tokens.len() {
+            error!("unexpected end of tokens at ({}). expected a new line", next);
+            return Err(UnexpectedEnd);
+        }
+
+        if tokens[next] != Token::NewLine {
+            error!("unexpected token ({:?}) at ({}). expected a new line", &tokens[next], next);
+            return Err(UnexpectedToken);
+        }
+
+        Result::<Vec<FunctionParameter>, FunctionParseError>::Ok(params)
+    } else {
+        let mut params = vec![];
+
+        while tokens[next] != Token::NewLine {
+            if tokens[next] != Token::Comma && !params.is_empty() {
+                error!("unexpected token ({:?}) at ({}). expected a comma", &tokens[next], next);
+                return Err(UnexpectedToken);
+            }
+
+            next += 1;
+
+            if next >= tokens.len() {
+                error!("unexpected end of tokens at ({}). expected a function parameter", next);
+                return Err(UnexpectedEnd);
+            }
+    
+            let (param, reached) = parse_function_parameter(tokens, next)?;
+
+            params.push(param);
+    
+            next = reached + 1;
+    
+            if next >= tokens.len() {
+                error!("unexpected end of tokens at ({}). expected a function parameter", next);
+                return Err(UnexpectedEnd);
+            }
+        }
+
+        Ok(params)
+    }?;
+
+    next += 1;
+    
+    let (block, reached) = parse_function_block(tokens, cursor, name.as_ref())?;
+
+    Ok(
+        (
+            Function {
+                name,
+                parameters: parameters.into(),
+                block
+            },
+
+            reached
+        )
+    )
+}
+
+/// consumes the entire token stream
+fn parse_script<T: AsRef<[Token]>>(tokens: T) {
+    todo!();
 }

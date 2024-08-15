@@ -72,6 +72,7 @@ pub enum Keyword {
     Char,
     Line,
     The,
+    Type,
 
     INF,
     NAN
@@ -555,6 +556,10 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                         tokens.push(Token::Keyword(Keyword::Down));
                     },
                     
+                    "type" => {
+                        tokens.push(Token::Keyword(Keyword::Type));
+                    },
+
                     "otherwise" => {
                         tokens.push(Token::Keyword(Keyword::Otherwise));
                     },

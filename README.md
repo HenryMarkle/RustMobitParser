@@ -10,8 +10,9 @@ The parser takes a stream of UTF-8 characters and turns it into an Abstract Synt
 |---------|--------|
 | Expressions | Yes |
 | Functions | No |
-| If statements | No |
-| Switch cases| No |
+| If statements | Yes |
+| Switch cases| Yes |
+| Repeat statements | Yes |
 | Assignment Operators | Yes |
 | Global Declarations | Yes |
 | Operator Precedence | Yes |
