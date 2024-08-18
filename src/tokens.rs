@@ -279,6 +279,33 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                 tokens.push(Token::Operator(Operator::Addition));
             }
             '-' => {
+                if let Some(next) = chars.peek() {
+                    
+                    // comment
+                    if *next == '-' {
+                        chars.next();
+                        
+                        while let Some(next_next) = chars.peek() {
+                            let peeked = *next_next;
+                            chars.next();
+                            
+                            if peeked == '\n' || peeked == '\r' {
+                                if peeked == '\r' {
+                                    if let Some(peeked2) = chars.peek() {
+                                        if *peeked2 == '\n' {
+                                            chars.next();
+                                        }
+                                    }
+                                }
+                                
+                                continue 'main_loop;
+                            }
+                        }
+
+                        continue 'main_loop;
+                    }
+                }
+
                 tokens.push(Token::Operator(Operator::Subtraction));
             }
             '*' => {
