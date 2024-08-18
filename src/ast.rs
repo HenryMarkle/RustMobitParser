@@ -2853,6 +2853,7 @@ fn parse_repeat_statement(tokens: &[Token], cursor: usize) -> Result<(RepeatStat
     )
 }
 
+/// consumes 'end (iden)'
 fn parse_function_block(tokens: &[Token], cursor: usize, name: &str) -> Result<(Box<[Statement]>, usize), FunctionParseError> {
     use FunctionParseError::*;
     
@@ -2880,9 +2881,13 @@ fn parse_function_block(tokens: &[Token], cursor: usize, name: &str) -> Result<(
         if tokens[next] == Token::Keyword(Keyword::End) {
             let peek = next + 1;
 
-            if peek >= tokens.len() {
-                error!("unexpected end of tokens at ({}). expected 'repeat'", peek);
-                return Err(UnexpectedEnd);
+            if peek >= tokens.len() || tokens[peek] == Token::NewLine {
+                return Ok(
+                    (
+                        statements.into(),
+                        next
+                    )
+                );
             }
 
             if let Token::Identifier(iden) = &tokens[peek] {
@@ -2890,7 +2895,7 @@ fn parse_function_block(tokens: &[Token], cursor: usize, name: &str) -> Result<(
                     error!("function 'end' identifier does not match with function's name ({:?}) at ({}). expected '{}'", 
                         &tokens[peek], 
                         peek, 
-                        name.borrow()
+                        name
                     );
 
                     return Err(UnexpectedToken);
