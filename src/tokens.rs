@@ -38,6 +38,8 @@ pub enum BlockEnd {
 #[derive(Debug, PartialEq)]
 pub enum Keyword {
     Global,
+    True,
+    False,
     Property,
     Case,
     Otherwise,
@@ -297,7 +299,7 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                                         }
                                     }
                                 }
-                                
+
                                 continue 'main_loop;
                             }
                         }
@@ -462,7 +464,15 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                     }
                 }
 
-                match buffer.deref() {
+                match buffer.to_lowercase().deref() {
+                    "true" => {
+                        tokens.push(Token::Keyword(Keyword::True));
+                    },
+
+                    "false" => {
+                        tokens.push(Token::Keyword(Keyword::False));
+                    },
+
                     "global" => {
                         tokens.push(Token::Keyword(Keyword::Void));
                     },
