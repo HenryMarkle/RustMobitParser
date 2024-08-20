@@ -1,4 +1,5 @@
 use std::borrow::Borrow;
+use std::f32::consts::E;
 use std::{
     collections::HashMap,
     rc::Rc
@@ -96,6 +97,9 @@ pub enum Expression {
         operator: PostOperator
     },
 
+    The(Box<TheExpression>),
+    New(Box<NewExpression>),
+
     Void
 }
 
@@ -126,12 +130,31 @@ pub enum PutPosition {
 }
 
 #[derive(Debug)]
-pub enum TheStatement {
+pub enum TheExpression {
     LastCharOf(Expression),
+    LastItemOf(Expression),
+    LastLineOf(Expression),
+    LastWordOf(Expression),
+    
     NumberOfLinesIn(Expression),
     NumberOf(Expression),
     
-    The(Expression)
+    The(Rc<str>)
+}
+
+#[derive(Debug)]
+pub enum NewExpression {
+    Script {
+        name: Expression,
+        args: Box<[ Expression ]>
+    },
+
+    CastLib {
+        lib: Expression,
+        args: Box<[ Expression ]>
+    },
+    
+    Expression(Expression)
 }
 
 #[derive(Debug)]
@@ -201,8 +224,6 @@ pub enum Statement {
         applied_to: Expression,
         position: PutPosition
     },
-
-    The(TheStatement),
 
     Exit(ExitArgument),
     Global(Box<[ Variable ]>),
@@ -928,6 +949,7 @@ fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equals:
                 )
             );
         },
+
         Token::Range => {
             error!("unexpected range token at ({})", begin);
             return Err(ExpressionParseError::UnexpectedToken { character: "..".into() });
@@ -959,9 +981,194 @@ fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equals:
                     return Err(ExpressionParseError::UnexpectedEnd);
                 }
 
+                if tokens[begin] != Token::Keyword(Keyword::Of) {
+                    error!("unexpected token at ({}). expected 'of' or 'to'", begin);
+                    return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", tokens[begin]) });
+                }
+
+                begin += 1;
+
+                if begin >= length {
+                    error!("unexpected end of tokens at ({}). expected an expression", begin);
+                    return Err(ExpressionParseError::UnexpectedEnd);
+                }
+
+                let (chunk, reached) = parse_expression(tokens, begin, min_precedence, true)?;
+
+                let converted_chunk = Expression::PostOperation { 
+                    left: Box::new(chunk), 
+                    operator: PostOperator::MemberAccess(match k {
+                        Keyword::Item => Ok(Rc::from("item")),
+                        Keyword::Word => Ok(Rc::from("word")),
+                        Keyword::Line => Ok(Rc::from("line")),
+                        Keyword::Char => Ok(Rc::from("char")),
+                        _ => Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", k) }),
+                    }?) 
+                };
+
+                match range_expr {
+                    Expression::Range { begin, end } => {
+                        parse_res = Ok(
+                            (
+                                Expression::PostOperation { 
+                                    left: Box::new(converted_chunk), 
+                                    operator: PostOperator::Slice { begin, end } 
+                                },
+
+                                reached
+                            )
+                        )
+                    }, 
+                    
+                    Expression::InverseRange { begin, end } => {
+                        parse_res = Ok(
+                            (
+                                Expression::PostOperation { 
+                                    left: Box::new(converted_chunk), 
+                                    operator: PostOperator::Slice { begin, end } 
+                                },
+
+                                reached
+                            )
+                        )
+                    },
+
+                    index => {
+                        parse_res = Ok(
+                            (
+                                Expression::PostOperation { 
+                                    left: Box::new(converted_chunk), 
+                                    operator: PostOperator::Index(Box::new(index)) 
+                                },
+
+                                reached
+                            )
+                        )
+                    }
+                }
+            },
+
+            Keyword::The => {
+                begin += 1;
+
+                if begin >= length {
+                    error!("unexpected end of tokens at ({}). expected 'last', 'number', or an identifier", begin);
+                    return Err(ExpressionParseError::UnexpectedEnd);
+                }
+
                 match &tokens[begin] {
-                    Token::Keyword(sk) => match sk {
-                        Keyword::Of => {
+                    Token::Keyword(k) =>  {
+                        if k != Keyword::Last.borrow() {
+                            error!("unexpected keyword token ({:?}) at ({}). expected 'last'", k, begin);
+                            return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", k) });
+                        }
+
+                        begin += 1;
+
+                        if begin >= length {
+                            error!("unexpected end of tokens at ({}). expected 'char', 'word', 'line', or 'item'", begin);
+                            return Err(ExpressionParseError::UnexpectedEnd);
+                        }
+
+                        match &tokens[begin] {
+                            Token::Keyword(k) => match k {
+                                Keyword::Char | Keyword::Line | Keyword::Word | Keyword::Item => (),
+                                wk => { 
+                                    error!("unexpected keyword token ({:?}) at ({}). expected 'char', 'word', 'line', or 'item'", wk, begin);
+                                    return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", wk) }); 
+                                }
+                            },
+
+                            wt => {
+                                error!("unexpected token ({:?}) at ({}). expected 'char', 'word', 'line', or 'item'", wt, begin);
+                                return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", wt) }); 
+                            }
+                        }
+
+                        begin += 1;
+
+                        if begin >= length {
+                            error!("unexpected end of tokens at ({}). expected 'of'", begin);
+                            return Err(ExpressionParseError::UnexpectedEnd);
+                        }
+
+                        if tokens[begin] != Token::Keyword(Keyword::Of) {
+                            error!("unexpected keyword token ({:?}) at ({}). expected 'of'", k, begin);
+                            return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", k) });
+                        }
+
+                        let (sub_expr, reached) = parse_expression(
+                            tokens, 
+                            begin, 
+                            0, 
+                            false
+                        )?;
+
+                        let last_expr = match &tokens[begin] {
+                            Token::Keyword(k) => match k {
+                                Keyword::Char => Ok(TheExpression::LastCharOf(sub_expr)), 
+                                Keyword::Line => Ok(TheExpression::LastLineOf(sub_expr)), 
+                                Keyword::Word => Ok(TheExpression::LastWordOf(sub_expr)),
+                                Keyword::Item => Ok(TheExpression::LastItemOf(sub_expr)),
+
+                                wk => { 
+                                    error!("unexpected keyword token ({:?}) at ({}). expected 'char', 'word', 'line', or 'item'", wk, begin);
+                                    Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", wk) })
+                                }
+                            },
+
+                            wt => {
+                                error!("unexpected token ({:?}) at ({}). expected 'char', 'word', 'line', or 'item'", wt, begin);
+                                Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", wt) })
+                            }
+                        }?;
+
+                        parse_res = Ok(
+                            (
+                                Expression::The(Box::new(last_expr)),
+                                reached
+                            )
+                        ) 
+                    },
+
+                    Token::Identifier(identifier) => {
+                        if identifier.eq_ignore_ascii_case("number") {
+                            begin += 1;
+
+                            if begin >= length {
+                                error!("unexpected end of tokens at ({}). expected 'of'", begin);
+                                return Err(ExpressionParseError::UnexpectedEnd);
+                            }
+
+                            if tokens[begin] != Token::Keyword(Keyword::Of) {
+                                error!("unexpected token ({:?}) at ({}). expected 'of'", tokens[begin], begin);
+                                return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", tokens[begin]) });
+                            }
+
+                            begin += 1;
+
+                            if begin >= length {
+                                error!("unexpected end of tokens at ({}). expected 'lines'", begin);
+                                return Err(ExpressionParseError::UnexpectedEnd);
+                            }
+
+                            if tokens[begin] != Token::Keyword(Keyword::Lines) {
+                                error!("unexpected token ({:?}) at ({}). expected 'lines'", tokens[begin], begin);
+                                return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", tokens[begin]) });
+                            }
+
+                            begin += 1;
+
+                            if begin >= length {
+                                error!("unexpected end of tokens at ({}). expected 'in'", begin);
+                                return Err(ExpressionParseError::UnexpectedEnd);
+                            }
+
+                            if tokens[begin] != Token::Keyword(Keyword::In) {
+                                error!("unexpected token ({:?}) at ({}). expected 'in'", tokens[begin], begin);
+                                return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", tokens[begin]) });
+                            }
+
                             begin += 1;
 
                             if begin >= length {
@@ -969,64 +1176,281 @@ fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equals:
                                 return Err(ExpressionParseError::UnexpectedEnd);
                             }
 
-                            let (chunk, reached) = parse_expression(tokens, begin, min_precedence, true)?;
+                            let (expr, reached) = parse_expression(
+                                tokens, 
+                                begin, 
+                                0, 
+                                false
+                            )?;
 
-                            match range_expr {
-                                Expression::Range { begin, end } => {
-                                    parse_res = Ok(
-                                        (
-                                            Expression::PostOperation { 
-                                                left: Box::new(chunk), 
-                                                operator: PostOperator::Slice { begin, end } 
-                                            },
-        
-                                            reached
-                                        )
-                                    )
-                                }, 
-                                
-                                Expression::InverseRange { begin, end } => {
-                                    parse_res = Ok(
-                                        (
-                                            Expression::PostOperation { 
-                                                left: Box::new(chunk), 
-                                                operator: PostOperator::Slice { begin, end } 
-                                            },
-        
-                                            reached
-                                        )
-                                    )
-                                },
-
-                                index => {
-                                    parse_res = Ok(
-                                        (
-                                            Expression::PostOperation { 
-                                                left: Box::new(chunk), 
-                                                operator: PostOperator::Index(Box::new(index)) 
-                                            },
-        
-                                            reached
-                                        )
-                                    )
-                                }
-                            }
-                        },
-
-                        wk => {
-                            error!("unexpected token at ({}). expected 'of' or 'to'", begin);
-                            return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", wk) });
+                            parse_res = Ok(
+                                (
+                                    Expression::The(Box::new(TheExpression::NumberOfLinesIn(expr))),
+                                    reached
+                                )
+                            );
+                        } else {
+                            parse_res = Ok(
+                                (
+                                    Expression::The(Box::new(TheExpression::The(Rc::clone(identifier)))),
+                                    begin
+                                )
+                            )
                         }
+
                     },
 
                     wt => {
-                        error!("unexpected token at ({}). expected 'of' or 'to'", begin);
+                        error!("unexpected token ({:?}) at ({}). expected 'last', 'number', or an identifier", wt, begin);
                         return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", wt) });
                     }
                 }
             },
 
-            
+            Keyword::New => {
+                // new(script"example", ..)
+                // new(.., castLib<expr>)
+                // new <expr>
+
+                begin += 1;
+
+                if begin >= length {
+                    error!("unexpected end of tokens at ({}). expected '(' or an expression", begin);
+                    return Err(ExpressionParseError::UnexpectedEnd);
+                }
+
+                let new_script: NewExpression = if tokens[begin] == Token::OpenParenthesis {
+                    begin += 1;
+
+                    if begin >= length {
+                        error!("unexpected end of tokens at ({}). expected 'scrip' or an expression", begin);
+                        return Err(ExpressionParseError::UnexpectedEnd);
+                    }
+
+                    if let Token::Identifier(iden) = &tokens[begin] {
+                        if iden.eq_ignore_ascii_case("script") {
+                            begin += 1;
+
+                            if begin >= length {
+                                error!("unexpected end of tokens at ({}). expected an expression", begin);
+                                return Err(ExpressionParseError::UnexpectedEnd);
+                            }
+
+                            let (script_expr, reached) = parse_expression(
+                                tokens, 
+                                begin, 
+                                0, 
+                                false
+                            )?;
+
+                            begin = reached + 1;
+
+                            let mut args = vec![];
+
+                            'args: loop {
+                                if begin >= length {
+                                    error!("unexpected end of tokens at ({}). expected ','", begin);
+                                    return Err(ExpressionParseError::UnexpectedEnd);
+                                }
+                                
+                                if tokens[begin] == Token::CloseParenthesis { break 'args; }
+
+                                if tokens[begin] != Token::Comma {
+                                    error!("unexpected token at ({}). expected ','", begin);
+                                    return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", &tokens[begin]) });
+                                }
+
+                                let (arg_expr, reached) = parse_expression(
+                                    tokens, 
+                                    begin, 
+                                    0, 
+                                    true
+                                )?;
+
+                                args.push(arg_expr);
+
+                                begin = reached + 1;
+                            }
+
+                            Ok(NewExpression::Script { name: script_expr, args: args.into() })
+                        } else {
+                            let mut args = vec![];
+                            let mut cast_lib = None;
+
+                            'args: loop {
+                                if let Token::Identifier(iden) = &tokens[begin] {
+                                    if iden.eq_ignore_ascii_case("castlib") {
+                                        begin += 1;
+
+                                        if begin >= length {
+                                            error!("unexpected end of tokens at ({}). expected an expression", begin);
+                                            return Err(ExpressionParseError::UnexpectedEnd);
+                                        }
+
+                                        let (castlib_expr, reached) = parse_expression(
+                                            tokens, 
+                                            begin, 
+                                            0, 
+                                            true
+                                        )?;
+
+                                        begin = reached + 1;
+
+                                        if begin >= length {
+                                            error!("unexpected end of tokens at ({}). expected a ')'", begin);
+                                            return Err(ExpressionParseError::UnexpectedEnd);
+                                        }
+
+                                        if tokens[begin] != Token::CloseParenthesis {
+                                            error!("unexpected token at ({}). epxpexted ')'", begin);
+                                            return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", &tokens[begin]) });
+                                        }
+
+                                        cast_lib = Some(castlib_expr);
+                                        break 'args;
+                                    }
+                                }
+
+                                let (arg_expr, reached) = parse_expression(
+                                    tokens, 
+                                    begin, 
+                                    0, 
+                                    true
+                                )?;
+
+                                args.push(arg_expr);
+
+                                begin = reached + 1;
+
+                                if begin >= length {
+                                    error!("unexpected end of tokens at ({}). expected a comma, or ')'", begin);
+                                    return Err(ExpressionParseError::UnexpectedEnd);
+                                }
+
+                                if tokens[begin] == Token::CloseParenthesis {
+                                    if cast_lib.is_none() {
+                                        error!("new() call without 'castLib' at ({})", begin);
+                                        return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", &tokens[begin]) });
+                                    }
+
+                                    break 'args;
+                                }
+
+                                if tokens[begin] != Token::Comma {
+                                    error!("unexpected token at ({}). expected a comma", begin);
+                                    return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", &tokens[begin]) });
+                                }
+
+                                begin += 1;
+
+                                if begin >= length {
+                                    error!("unexpected end of tokens at ({}). expected an expression", begin);
+                                    return Err(ExpressionParseError::UnexpectedEnd);
+                                }
+                            }
+                        
+                            Ok(NewExpression::CastLib { args: args.into(), lib: cast_lib.unwrap() })
+                        }
+                    } else {
+                        let mut args = vec![];
+                        let mut cast_lib = None;
+
+                        'args: loop {
+                            if let Token::Identifier(iden) = &tokens[begin] {
+                                if iden.eq_ignore_ascii_case("castlib") {
+                                    begin += 1;
+
+                                    if begin >= length {
+                                        error!("unexpected end of tokens at ({}). expected an expression", begin);
+                                        return Err(ExpressionParseError::UnexpectedEnd);
+                                    }
+
+                                    let (castlib_expr, reached) = parse_expression(
+                                        tokens, 
+                                        begin, 
+                                        0, 
+                                        true
+                                    )?;
+
+                                    begin = reached + 1;
+
+                                    if begin >= length {
+                                        error!("unexpected end of tokens at ({}). expected a ')'", begin);
+                                        return Err(ExpressionParseError::UnexpectedEnd);
+                                    }
+
+                                    if tokens[begin] != Token::CloseParenthesis {
+                                        error!("unexpected token at ({}). epxpexted ')'", begin);
+                                        return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", &tokens[begin]) });
+                                    }
+
+                                    cast_lib = Some(castlib_expr);
+                                    break 'args;
+                                }
+                            }
+
+                            let (arg_expr, reached) = parse_expression(
+                                tokens, 
+                                begin, 
+                                0, 
+                                true
+                            )?;
+
+                            args.push(arg_expr);
+
+                            begin = reached + 1;
+
+                            if begin >= length {
+                                error!("unexpected end of tokens at ({}). expected a comma, or ')'", begin);
+                                return Err(ExpressionParseError::UnexpectedEnd);
+                            }
+
+                            if tokens[begin] == Token::CloseParenthesis {
+                                if cast_lib.is_none() {
+                                    error!("new() call without 'castLib' at ({})", begin);
+                                    return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", &tokens[begin]) });
+                                }
+
+                                break 'args;
+                            }
+
+                            if tokens[begin] != Token::Comma {
+                                error!("unexpected token at ({}). expected a comma", begin);
+                                return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", &tokens[begin]) });
+                            }
+
+                            begin += 1;
+
+                            if begin >= length {
+                                error!("unexpected end of tokens at ({}). expected an expression", begin);
+                                return Err(ExpressionParseError::UnexpectedEnd);
+                            }
+                        }
+                    
+                        Ok(NewExpression::CastLib { args: args.into(), lib: cast_lib.unwrap() })
+                    }
+
+
+                } else {
+                    let (new_expr, reached) = parse_expression(
+                        tokens, 
+                        begin, 
+                        0, 
+                        false
+                    )?;
+
+                    begin = reached;
+
+                    Ok(NewExpression::Expression(new_expr))
+                }?;
+
+                parse_res = Ok(
+                    (
+                        Expression::New(Box::new(new_script)),
+                        begin
+                    )
+                )
+            }
             
             _ => {
                 return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", k) });

@@ -38,8 +38,6 @@ pub enum BlockEnd {
 #[derive(Debug, PartialEq)]
 pub enum Keyword {
     Global,
-    True,
-    False,
     Property,
     Case,
     Otherwise,
@@ -59,7 +57,10 @@ pub enum Keyword {
     End,
     Exit,
     Item,
+    New,
     To,
+    Last,
+    Lines,
     Before,
     After,
     Into,
@@ -465,12 +466,16 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                 }
 
                 match buffer.to_lowercase().deref() {
-                    "true" => {
-                        tokens.push(Token::Keyword(Keyword::True));
+                    "last" => {
+                        tokens.push(Token::Keyword(Keyword::Last));
                     },
 
-                    "false" => {
-                        tokens.push(Token::Keyword(Keyword::False));
+                    "lines" => {
+                        tokens.push(Token::Keyword(Keyword::Lines));
+                    },
+
+                    "new" => {
+                        tokens.push(Token::Keyword(Keyword::New));
                     },
 
                     "global" => {
