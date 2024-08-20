@@ -1,5 +1,4 @@
 use std::borrow::Borrow;
-use std::f32::consts::E;
 use std::{
     collections::HashMap,
     rc::Rc
@@ -3575,9 +3574,7 @@ pub fn parse_function(tokens: &[Token], cursor: usize) -> Result<(Function, usiz
 /// consumes the entire token stream
 pub fn parse_script<T: AsRef<[Token]>>(tokens: T) -> Result<Script, ScriptParseError> {
     use ScriptParseError::*;
-    use Token::{
-        Keyword
-    };
+    use Token::Keyword;
     use tokens::Keyword::{
         On,
         Global,
