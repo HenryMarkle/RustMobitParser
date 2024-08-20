@@ -466,6 +466,10 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                 }
 
                 match buffer.to_lowercase().deref() {
+                    "on" => {
+                        tokens.push(Token::Keyword(Keyword::On));
+                    },
+
                     "last" => {
                         tokens.push(Token::Keyword(Keyword::Last));
                     },
@@ -479,11 +483,11 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                     },
 
                     "global" => {
-                        tokens.push(Token::Keyword(Keyword::Void));
+                        tokens.push(Token::Keyword(Keyword::Global));
                     },
                     
                     "property" => {
-                        tokens.push(Token::Keyword(Keyword::Void));
+                        tokens.push(Token::Keyword(Keyword::Property));
                     },
                     
                     "void" => {
