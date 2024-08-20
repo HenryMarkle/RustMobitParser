@@ -690,7 +690,10 @@ pub enum ScriptParseError {
     Variable(#[from] VariableDeclarationsParseError),
 
     #[error("failed to parse function")]
-    Function(#[from] FunctionParseError)
+    Function(#[from] FunctionParseError),
+
+    #[error("unexpected token")]
+    UnexpectedToken,
 }
 
 pub fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equals: bool) -> Result<(Expression, usize), ExpressionParseError> {
@@ -3426,7 +3429,7 @@ pub fn parse_function_block(tokens: &[Token], cursor: usize, name: &str) -> Resu
                 return Ok(
                     (
                         statements.into(),
-                        next
+                        peek
                     )
                 );
             }
@@ -3442,7 +3445,7 @@ pub fn parse_function_block(tokens: &[Token], cursor: usize, name: &str) -> Resu
                     return Err(UnexpectedToken);
                 }
             } else {
-                error!("unexpected token ({:?}) at ({}). expected 'repeat'", &tokens[peek], peek);
+                error!("unexpected token ({:?}) at ({}). expected the function identifier", &tokens[peek], peek);
                 return Err(UnexpectedToken);
             }
 
@@ -3631,10 +3634,18 @@ pub fn parse_script<T: AsRef<[Token]>>(tokens: T) -> Result<Script, ScriptParseE
                     cursor = reached;
                 },
 
-                _ => {  }
+                wk => { 
+                    error!("unexpected keyword token ({:?}) at ({})", wk, cursor);
+                    return Err(UnexpectedToken); 
+                }
             },
 
-            _ => {}
+            Token::NewLine => { cursor +=1 ; }
+
+            wt => { 
+                error!("unexpected token ({:?}) at ({})", wt, cursor);
+                return Err(UnexpectedToken); 
+            }
         }
     }
 

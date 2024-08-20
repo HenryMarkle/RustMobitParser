@@ -1,12 +1,39 @@
 use anyhow::Result;
+use log::info;
 use simple_logger::SimpleLogger;
 
 use crate::{ast::{self, Expression, PostOperator}, tokens};
 
 #[test]
-pub fn function() -> Result<()> {
-    SimpleLogger::new().init()?;
+pub fn scripts() -> Result<()> {
+    use std::fs;
     
+    SimpleLogger::new().init()?;
+
+    let dirs = fs::read_dir(r#"C:\Users\Henry Markle\Projects\RustMobitParser\test"#)?;
+
+    let scripts: Vec<_> = dirs
+        .flatten()
+        .filter(|e| e.file_type().unwrap().is_file())
+        .map(|e| (e.file_name().to_string_lossy().into_owned(), fs::read_to_string(e.path())))
+        .filter(|(_, script)| script.is_ok())
+        .collect();
+
+    for (name, script) in scripts {
+        info!("parsing script \"{:?}\"", name);
+
+        let text = script.unwrap();
+
+        let t = tokens::tokenize(&text)?;
+    
+        let _ = ast::parse_script(t)?;
+    }
+
+    Ok(())
+}
+
+#[test]
+pub fn function() -> Result<()> {    
     let t1 = tokens::tokenize(
         "on function
         end"
