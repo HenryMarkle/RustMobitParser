@@ -290,7 +290,6 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                         
                         while let Some(next_next) = chars.peek() {
                             let peeked = *next_next;
-                            chars.next();
                             
                             if peeked == '\n' || peeked == '\r' {
                                 if peeked == '\r' {
@@ -303,6 +302,9 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
 
                                 continue 'main_loop;
                             }
+
+                            chars.next();
+                            
                         }
 
                         continue 'main_loop;
@@ -375,7 +377,7 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                         buffer3.push(*next);
 
                         chars.next();
-                    } else if buffer3.is_empty() && (*next == '-' || *next == '+') {
+                    } else if !buffer3.is_empty() && (*next == '-' || *next == '+') {
                         if plusnegative {
                             return Err(TokenizeError::UnexpectedToken { character: *next });
                         }
@@ -465,7 +467,8 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                     }
                 }
 
-                match buffer.to_lowercase().deref() {
+                // Keywords
+                match buffer.deref() {
                     "on" => {
                         tokens.push(Token::Keyword(Keyword::On));
                     },
@@ -620,14 +623,6 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
                     
                     "line" => {
                         tokens.push(Token::Keyword(Keyword::Line));
-                    },
-
-                    "INT" => {
-                        tokens.push(Token::Keyword(Keyword::INF));
-                    },
-                    
-                    "NAN" => {
-                        tokens.push(Token::Keyword(Keyword::INF));
                     },
 
                     "contains" => {

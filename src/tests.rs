@@ -2,15 +2,15 @@ use anyhow::Result;
 use log::info;
 use simple_logger::SimpleLogger;
 
-use crate::{ast::{self, Expression, PostOperator}, tokens};
+use crate::{ast::{self, Expression, PostOperator, Statement}, tokens};
 
 #[test]
 pub fn scripts() -> Result<()> {
     use std::fs;
     
-    SimpleLogger::new().init()?;
+    SimpleLogger::new().with_level(log::LevelFilter::Error).init()?;
 
-    let dirs = fs::read_dir(r#"C:\Users\Henry Markle\Projects\RustMobitParser\test"#)?;
+    let dirs = fs::read_dir(r#"/home/henry/Projects/RustMobitParser/test"#)?;
 
     let scripts: Vec<_> = dirs
         .flatten()
@@ -20,11 +20,16 @@ pub fn scripts() -> Result<()> {
         .collect();
 
     for (name, script) in scripts {
-        info!("parsing script \"{:?}\"", name);
+        info!("parsing script {:?}", name);
 
         let text = script.unwrap();
 
         let t = tokens::tokenize(&text)?;
+
+        println!("Token 4260: {:?}\n", t[4260]);
+        for x in 0..20 {
+            println!("[{}] {:?}", 4260 - 10 + x, t[4260 - 10 + x]);
+        }
     
         let _ = ast::parse_script(t)?;
     }
@@ -83,6 +88,16 @@ pub fn function() -> Result<()> {
 }
 
 #[test]
+pub fn ranges() -> Result<()> {
+    let t1 = tokens::tokenize("1 + 2 to 3 + 4 ")?;
+    let (expr, _) = ast::parse_expression(&t1, 0, 0, false)?;
+
+    println!("{expr:#?}");
+
+    Ok(())
+}
+
+#[test]
 pub fn repeat_statement() -> Result<()> {    
     let t1 = tokens::tokenize(
         "repeat with i = 1 to 11 then
@@ -108,10 +123,14 @@ pub fn repeat_statement() -> Result<()> {
         end repeat"
     )?;
 
+    let t5 = tokens::tokenize("repeat with q = 1 + gLOprops.extratiles[1] to gLOprops.size.loch - gLOprops.extratiles[3] then
+    end repeat")?;
+
     let _ = ast::parse_repeat_statement(&t1, 0)?;
     let _ = ast::parse_repeat_statement(&t2, 0)?;
     let _ = ast::parse_repeat_statement(&t3, 0)?;
     let _ = ast::parse_repeat_statement(&t4, 0)?;
+    let _ = ast::parse_repeat_statement(&t5, 0)?;
     
     Ok(())
 }
@@ -150,11 +169,19 @@ pub fn if_single_line_statement() -> Result<()> {
 #[test]
 pub fn if_statement() -> Result<()> {
     let t1 = tokens::tokenize(
-        "if var = 1 then 
-          var = 1 + 1
-        else 
-          var = 2 + 2
-        end if"
+        "if X2 < X1 then 
+    if Y2 < Y1 then
+      fac = 1
+    else
+      fac = -1
+    end if
+  else
+    if Y2 < Y1 then
+      fac = 1
+    else
+      fac = -1
+    end if
+  end if"
     )?;
 
     let _ = ast::parse_condition(&t1, 0)?;
@@ -264,11 +291,11 @@ pub fn word_indexing() -> Result<()> {
 
 #[test]
 pub fn typed_assignment() -> Result<()> {
-    let t = tokens::tokenize("var: number = 1")?;
+    let t1 = tokens::tokenize("var: number = 1")?;
+    let t2 = tokens::tokenize("fileName = void")?;
     
-    let s = ast::parse_assignment(&t, 0)?;
-
-    assert_ne!(s.1, 0);
+    let (statement1, _) = ast::parse_assignment(&t1, 0)?;
+    let (statement2, _) = ast::parse_assignment(&t2, 0)?;
 
     Ok(())
 }
@@ -280,6 +307,33 @@ pub fn simple_assignment() -> Result<()> {
     let s = ast::parse_assignment(&t, 0)?;
 
     assert_ne!(s.1, 0);
+
+    Ok(())
+}
+
+#[test]
+pub fn space_concatination() -> Result<()> {
+    let t1 = tokens::tokenize("\"saving:\" && lvlName && \"...\"")?;
+
+    let (expr1, _) = ast::parse_expression(&t1, 0, 0, false)?;
+
+    match expr1 {
+        Expression::BinaryOperation { operator, left, right } => {
+            Ok(())
+        },
+
+        _ => Err(anyhow::anyhow!("expression was expected to be a binary operation"))
+    }
+    
+}
+
+#[test]
+pub fn put_statement() -> Result<()> {
+    let t = tokens::tokenize("put \"saving:\" && lvlName && \"...\"\n\n")?;
+    let t2 = tokens::tokenize("put RETURN after txt")?;
+
+    // let (statement1, _) = ast::parse_statement(&t, 0)?;
+    let (Statement2, _) = ast::parse_statement(&t2, 0)?;
 
     Ok(())
 }
