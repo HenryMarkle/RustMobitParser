@@ -76,7 +76,7 @@ pub enum Expression {
     },
 
     LinearList(Box<[Expression]>),
-    PropertyList(HashMap<Rc<str>, Expression>),
+    PropertyList(Vec<(Rc<str>, Expression)>),
 
     Identifier(Rc<str>),
 
@@ -716,7 +716,7 @@ pub fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equ
             debug!("parsing a collection at ({})", begin);
 
             let mut sub_nodes = vec![];
-            let mut map = HashMap::new();
+            let mut map = vec![];
             let mut commad = true;
             let mut is_prop = false;
             begin += 1;
@@ -750,66 +750,6 @@ pub fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equ
                             return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::Comma) });
                         }
                     },
-
-                    // Token::Symbol(key) => {
-                    //     debug!("parsing asymbol at ({})", begin);
-
-                    //     if !commad {
-                    //         error!("expected a comma at ({})", begin);
-                    //         return Err(ExpressionParseError::ExpectedToken { character: ',' });
-                    //     }
-
-                    //     commad = false;
-
-                    //     if !is_prop {
-                    //         if !sub_nodes.is_empty() {
-                    //             error!("found a property key while parsing a linear list at ({})", begin);
-                    //             return Err(ExpressionParseError::ObscureCollectionType);
-                    //         } else {
-                    //             let peek = begin + 1;
-                                
-                    //             if peek >= length {
-                    //                 error!("unexpected end of tokens at ({})", peek);
-                    //                 return Err(ExpressionParseError::UnexpectedEnd);
-                    //             }
-
-                    //             if tokens[peek] == Token::Colon {
-                    //                 debug!("collection is a property list at ({})", begin);
-                    //                 is_prop = true;
-                    //             }
-                    //         }
-                    //     }
-
-                    //     let colon_pos = begin + 1;
-                    //     let value_pos = colon_pos + 1;
-
-                    //     if value_pos >= length { return Err(ExpressionParseError::UnexpectedEnd); }
-
-                    //     if tokens[colon_pos] != Token::Colon {
-                    //         error!("property key wasn't followed by a colon at ({})", colon_pos);
-                    //         return Err(ExpressionParseError::ExpectedToken { character: ':' });
-                    //     }
-
-                    //     debug!("checking property value at ({})", begin);
-
-                    //     match &tokens[value_pos] {
-                    //         Token::CloseBracket | Token::CloseParenthesis | Token::Colon |
-                    //         Token::Comma | Token::Symbol(_) => {
-                    //             error!("illegal token for a property value at ({})", begin);
-                    //             return Err(ExpressionParseError::UnexpectedToken { character: "".into() });
-                    //         },
-
-                    //         _ => {
-                    //             debug!("parsing a property value sub-expression at ({})", value_pos);
-                    //             let (node, reached) = parse_expression(&tokens, value_pos, 0, equals)?;
-
-                    //             map.insert(Rc::clone(key), node);
-                    //             begin = reached;
-                    //             debug!("parsing property value sub-expression done at ({})", begin);
-
-                    //         }
-                    //     }
-                    // },
 
                     Token::Comma => {
                         if commad {
@@ -884,7 +824,7 @@ pub fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equ
                                         debug!("parsing a property value sub-expression at ({})", value_pos);
                                         let (node, reached) = parse_expression(&tokens, value_pos, 0, equals)?;
         
-                                        map.insert(Rc::clone(&key), node);
+                                        map.push((Rc::clone(&key), node));
                                         begin = reached;
                                         debug!("parsing property value sub-expression done at ({})", begin);
                                     }
@@ -896,6 +836,77 @@ pub fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equ
                         }
                     }
                 };
+
+                begin += 1;
+            };
+
+            if parse_res.is_err() {
+                error!("expected the collection to end but it didn't");
+                return Err(ExpressionParseError::ImbalancedCollection);
+            }
+        },
+
+        Token::OpenCurlyBrace => {
+            debug!("parsing a collection at ({})", begin);
+
+            let mut map = vec![];
+            begin += 1;
+
+            if begin >= length {
+                error!("unexpected end while parsing a property list.");
+                return Err(ExpressionParseError::UnexpectedEnd);
+            }
+
+            'collection_loop: while begin < length {
+                if tokens[begin] == Token::CloseCurlyBrace {
+                    parse_res = Ok((Expression::PropertyList(map), begin));
+                    break 'collection_loop;
+                }
+
+                if tokens[begin] == Token::Comma {
+                    begin += 1;
+                    if begin >= length {
+                        error!("unexpected end while parsing a property list; expected a comma.");
+                        return Err(ExpressionParseError::UnexpectedEnd);
+                    }
+                } else if !map.is_empty() {
+                    error!("unexpected token ({:?}) when parsing a property list; expected a comma.", &tokens[begin]);
+                    return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", tokens[begin]) });
+                }
+
+                let key = if let Token::Symbol(k) = &tokens[begin] {
+                    Ok(Rc::clone(k))
+                } else {
+                    error!("unexpected token while parsing property list key ({:?}); expected a symbol.", &tokens[begin]);
+                    Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", &tokens[begin]) })
+                }?;
+
+                begin += 1;
+                if begin >= length {
+                    error!("unexpected end while parsing a property list; expected a comma.");
+                    return Err(ExpressionParseError::UnexpectedEnd);
+                }
+
+                if tokens[begin] != Token::Colon {
+                    error!("unexpected token ({:?}) while parsing a property list; expected a colon.", &tokens[begin]);
+                    return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", &tokens[begin]) });
+                }
+
+                begin += 1;
+                if begin >= length {
+                    error!("unexpected end while parsing a property list; expected an expression.");
+                    return Err(ExpressionParseError::UnexpectedEnd);
+                }
+
+                let (value, reached) = parse_expression(tokens, begin, min_precedence, false)
+                    .map_err(|e| {
+                        error!("failed to parse property list value: ({:?})", &e);
+                        e
+                    })?;
+
+                begin = reached;
+
+                map.push((key, value));
 
                 begin += 1;
             };
@@ -1001,6 +1012,10 @@ pub fn parse_expression(tokens: &[Token], cursor: usize, min_precedence: u8, equ
         Token::CloseBracket => {
             error!("unexpected token ']' at ({})", begin);
             return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::CloseBracket) });
+        },
+        Token::CloseCurlyBrace => {
+            error!("unexpected token '{}' at ({})", "}", begin);
+            return Err(ExpressionParseError::UnexpectedToken { character: format!("{:?}", Token::CloseCurlyBrace) });
         },
         Token::CloseParenthesis => {
             error!("unexpected token ')' at ({})", begin);

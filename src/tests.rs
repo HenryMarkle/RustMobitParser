@@ -339,6 +339,32 @@ pub fn put_statement() -> Result<()> {
 }
 
 #[test]
+pub fn global_calls() -> Result<()> {
+    let t = tokens::tokenize("color(255, 255, 255)")?;
+    let (expr, _) = ast::parse_expression(&t, 0, 0, false)?;
+
+    println!("{:#?}", expr);
+
+    Ok(())
+
+}
+
+#[test]
+pub fn curly_braces_property_list() -> Result<()> {
+    SimpleLogger::new().with_level(log::LevelFilter::Debug).init()?;
+
+    let t1 = tokens::tokenize("{ #key: val, #name: \"Henry\" }")?;
+    let t2 = tokens::tokenize("[ #key: val, #name: \"Henry\" ]")?;
+    let (expr1, _) = ast::parse_expression(&t1, 0, 0, false)?;
+    let (expr2, _) = ast::parse_expression(&t2, 0, 0, false)?;
+
+    println!("{:#?}\n{:#?}", expr1, expr2);
+
+    Ok(())
+
+}
+
+#[test]
 pub fn type_casting() -> Result<()> {
     let t = tokens::tokenize("type return: number")?;
     

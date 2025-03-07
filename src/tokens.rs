@@ -89,6 +89,9 @@ pub enum Token {
     OpenParenthesis,
     CloseParenthesis,
 
+    OpenCurlyBrace,
+    CloseCurlyBrace,
+
     Comma,
     Colon,
     Range,
@@ -185,8 +188,13 @@ pub fn tokenize<T: AsRef<str>>(string: T) -> Result<Vec<Token>, TokenizeError> {
             }
             ']' => {
                 tokens.push(Token::CloseBracket);
-            }
-
+            },
+            '{' => {
+                tokens.push(Token::OpenCurlyBrace);
+            },
+            '}' => {
+                tokens.push(Token::CloseCurlyBrace);
+            },
             '(' => {
                 tokens.push(Token::OpenParenthesis);
             }
